@@ -1,85 +1,148 @@
 <!doctype html>
 <html lang="en">
+
 <head>
-<meta charset="utf-8"/>
-<meta name="viewport" content="width=device-width, initial-scale=1"/>
-<title>Clave — logo concepts</title>
-<style>
-  :root { --bg:#0B1120; --tile:#0E1626; --line:#1E2A3D; --ink:#E2E8F0; --sub:#7C8BA1; }
-  * { box-sizing:border-box; }
-  body { margin:0; background:var(--bg); color:var(--ink);
-         font:15px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif; }
-  header { padding:40px 32px 8px; }
-  header h1 { margin:0; font-size:22px; letter-spacing:.3px; }
-  header p { margin:6px 0 0; color:var(--sub); }
-  .grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(260px,1fr));
-          gap:24px; padding:24px 32px 56px; }
-  .card { background:var(--tile); border:1px solid var(--line); border-radius:18px;
-          padding:22px; }
-  .tile { display:flex; align-items:center; justify-content:center;
-          background:radial-gradient(120% 120% at 30% 20%, #14203a 0%, #0a0f1c 100%);
-          border:1px solid var(--line); border-radius:28px; aspect-ratio:1; }
-  .tile img { width:62%; height:62%; }
-  /* light tile to check contrast */
-  .row { display:flex; align-items:center; gap:14px; margin-top:18px; }
-  .chip { background:#F1F5F9; border-radius:9px; padding:8px; display:flex; }
-  .chip img { width:40px; height:40px; }
-  .fav { background:#0a0f1c; border:1px solid var(--line); border-radius:7px;
-         padding:6px; display:flex; }
-  .fav img { width:20px; height:20px; }
-  .meta { margin-top:16px; }
-  .meta h2 { margin:0; font-size:16px; }
-  .meta p  { margin:4px 0 0; color:var(--sub); font-size:13px; }
-  .tag { color:var(--sub); font-size:12px; }
-</style>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Clave — logo concepts</title>
+  <style>
+    :root {
+      --bg: #0B1120;
+      --tile: #0E1626;
+      --line: #1E2A3D;
+      --ink: #E2E8F0;
+      --sub: #7C8BA1;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--ink);
+      font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    }
+
+    header {
+      padding: 40px 32px 8px;
+    }
+
+    header h1 {
+      margin: 0;
+      font-size: 22px;
+      letter-spacing: .3px;
+    }
+
+    header p {
+      margin: 6px 0 0;
+      color: var(--sub);
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+      gap: 24px;
+      padding: 24px 32px 56px;
+    }
+
+    .card {
+      background: var(--tile);
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      padding: 22px;
+    }
+
+    .tile {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: radial-gradient(120% 120% at 30% 20%, #14203a 0%, #0a0f1c 100%);
+      border: 1px solid var(--line);
+      border-radius: 28px;
+      aspect-ratio: 1;
+    }
+
+    .tile img {
+      width: 62%;
+      height: 62%;
+    }
+
+    /* light tile to check contrast */
+    .row {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      margin-top: 18px;
+    }
+
+    .chip {
+      background: #F1F5F9;
+      border-radius: 9px;
+      padding: 8px;
+      display: flex;
+    }
+
+    .chip img {
+      width: 40px;
+      height: 40px;
+    }
+
+    .fav {
+      background: #0a0f1c;
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      padding: 6px;
+      display: flex;
+    }
+
+    .fav img {
+      width: 20px;
+      height: 20px;
+    }
+
+    .meta {
+      margin-top: 16px;
+    }
+
+    .meta h2 {
+      margin: 0;
+      font-size: 16px;
+    }
+
+    .meta p {
+      margin: 4px 0 0;
+      color: var(--sub);
+      font-size: 13px;
+    }
+
+    .tag {
+      color: var(--sub);
+      font-size: 12px;
+    }
+  </style>
 </head>
+
 <body>
-<header>
-  <h1>Clave — 5 logo concepts</h1>
-  <p>Big tile = app/dock icon · light chip = contrast check · tiny = 20px favicon / tray</p>
-</header>
-<div class="grid">
+  <header>
+    <h1>Clave — 5 logo concepts</h1>
+    <p>Big tile = app/dock icon · light chip = contrast check · tiny = 20px favicon / tray</p>
+  </header>
+  <div class="grid">
 
-  <div class="card">
-    <div class="tile"><img src="1-overlap-enclave.svg" alt=""></div>
-    <div class="meta"><h2>1 · Overlap Enclave</h2>
-      <p>Work ∩ personal; the secure overlap holds a keyhole. Closest to the architecture.</p></div>
-    <div class="row"><span class="tag">on light</span><span class="chip"><img src="1-overlap-enclave.svg"></span>
-      <span class="tag">tray</span><span class="fav"><img src="1-overlap-enclave.svg"></span></div>
+    <div class="card">
+      <div class="tile"><img src="3-enclave-brackets.svg" alt=""></div>
+      <div class="meta">
+        <h2>3 · En·[clave] Brackets</h2>
+        <p>Literal enclosing; developer-native, monochrome-safe.</p>
+      </div>
+      <div class="row"><span class="tag">on light</span><span class="chip"><img src="3-enclave-brackets.svg"></span>
+        <span class="tag">tray</span><span class="fav"><img src="3-enclave-brackets.svg"></span>
+      </div>
+    </div>
+
   </div>
-
-  <div class="card">
-    <div class="tile"><img src="2-keyhole-c.svg" alt=""></div>
-    <div class="meta"><h2>2 · Keyhole C</h2>
-      <p>One mark = "Clave", "key", "unlock". Best as the app/tray glyph.</p></div>
-    <div class="row"><span class="tag">on light</span><span class="chip"><img src="2-keyhole-c.svg"></span>
-      <span class="tag">tray</span><span class="fav"><img src="2-keyhole-c.svg"></span></div>
-  </div>
-
-  <div class="card">
-    <div class="tile"><img src="3-enclave-brackets.svg" alt=""></div>
-    <div class="meta"><h2>3 · En·[clave] Brackets</h2>
-      <p>Literal enclosing; developer-native, monochrome-safe.</p></div>
-    <div class="row"><span class="tag">on light</span><span class="chip"><img src="3-enclave-brackets.svg"></span>
-      <span class="tag">tray</span><span class="fav"><img src="3-enclave-brackets.svg"></span></div>
-  </div>
-
-  <div class="card">
-    <div class="tile"><img src="4-clave-rhythm.svg" alt=""></div>
-    <div class="meta"><h2>4 · 3-2 Clave Rhythm</h2>
-      <p>The musical root nobody else in security owns; also reads as a C aperture.</p></div>
-    <div class="row"><span class="tag">on light</span><span class="chip"><img src="4-clave-rhythm.svg"></span>
-      <span class="tag">tray</span><span class="fav"><img src="4-clave-rhythm.svg"></span></div>
-  </div>
-
-  <div class="card">
-    <div class="tile"><img src="5-vault-aperture.svg" alt=""></div>
-    <div class="meta"><h2>5 · Vault Aperture</h2>
-      <p>Sealed but opens for you; premium on a dark UI.</p></div>
-    <div class="row"><span class="tag">on light</span><span class="chip"><img src="5-vault-aperture.svg"></span>
-      <span class="tag">tray</span><span class="fav"><img src="5-vault-aperture.svg"></span></div>
-  </div>
-
-</div>
 </body>
+
 </html>

@@ -30,53 +30,61 @@ Architecture and subsystem design live in [`docs/`](docs/README.md).
   device-signed, **hash-chained audit spool** drains tamper-evidently to the gateway, which
   detects any suppression or rewrite (doc 10 §6).
 
-The split-tunnel data plane is wired into the daemon's flow path (`SplitRouter`); an authenticated
-Unix-socket IPC transport carries the shim↔daemon contracts; the encrypted Clave Disk's crypto
-core (`clave-volume`) is driven by the daemon — encrypting at rest, gating non-supervised callers,
-and crypto-shredding on wipe; remote wipe/lock/policy commands are Ed25519-verified and
-replay-protected, with a device-signed, hash-chained audit spool; and a portable `GatewaySync`
-loop drives the pull→apply→drain→ship exchange over a `GatewayLink` seam, with a real
-**mutual-TLS** link (`clave-proto`'s `mtls` feature: a rustls connector/acceptor — each side presents
-a cert and verifies the peer against pinned roots — producing the `TlsStream` the framed `transport`
-pump runs over). Every OS capability reports an `EnforcementStatus` — `Enforced` vs a
-`DevelopmentOnly` stand-in vs `Unavailable` — so a production build can't silently ship a dev-only
-fallback (doc 14 §5.3). The macOS adapter (`clave-mac`) is now a real `MacPlatform` reporting that
-honest posture — the ES-fed supervisor and shared split-tunnel classifier are wired (`DevelopmentOnly`
-until entitled), the rest `Unavailable` — plus the ES `AUTH_OPEN` volume gate over the C ABI; the
-Windows adapter (`clave-win`) is the same `WindowsPlatform` shape, and the daemon binary links the
-right one per target. Exec authorization is now a real decision: `classify_exec` matches a binary's
-**code-signature** against the signed app allow-list (doc 02 §3.2), so only vetted apps (or children
-of supervised processes) join the work zone, and each rule carries a `LaunchProfile` that resolves
-the app's HOME/temp **inside** the encrypted Clave Disk (doc 03 §6, doc 04 §5). `classify_path`
-rounds out the portable classifier trio (flow / exec / path): it tells the FS-redirection hook and
-the minifilter/ES gate whether a path is work-data, system-COW, or pass-through (doc 03 §3.3); a
-**learn mode** synthesizes candidate profiles from an app's observed footprint (doc 03 §6); the
-**`clave-cli`** diagnostics binary surfaces the enforcement posture and dry-runs the classifiers;
-and the gateway sync loop has a **live framed transport** (`clave-proto`'s `transport` feature) that
-mTLS wraps in production. **`proptest`** property tests pin the security-critical invariants (the
-`decide`/classifier logic, XTS + AES-KW round-trips, the audit chain, panic-free verification of
-untrusted bytes) across all inputs (doc 11 §6), and a fault-injection test confirms the volume is
-fail-closed under a mid-write "pull-the-plug" (doc 04 §7). The **Clave launcher** core is here too:
-`Daemon::launchable_apps` lists the allow-listed work apps and `prepare_launch` resolves each one's
-contained spawn spec — executable + env pointing into the encrypted disk (doc 00 §5.2). The
-**Tauri desktop app** (`apps/clave-launcher/`, Rust + React/Tailwind/shadcn) now reaches these over
-the authenticated `clave-ipc` link (`LauncherClient` ↔ the daemon's `handle_launcher_request`, doc
-10 §3), falling back to a demo policy when no daemon is running; the OS spawn+inject is the remaining
-layer. `clave-cli apps`/`launch` drive the same core from the terminal. The control-plane
-**gateway** (`clave-identity` + `clave-gateway`, doc 15) rounds out enrollment: console login,
-device-enrollment handshake, **device registration**, and the two doc 15 §9 step 5 enrollment
-artifacts a device receives on approval (the shared wire contract is `clave-proto`'s
-`EnrollmentGrant`): its **tenant-signed initial policy bundle** (`PolicyIssuer` → a `SignedCommand`
-its pinned-key `GatewayVerifier` accepts) and its **wrapped volume key** (`VolumeKeyService` → the
-Clave Disk DEK delivered to the device, either AES-KW-wrapped to a symmetric KEK for the dev
-bootstrap or, in production, **sealed to the device's X25519 hardware public key** via an
-ECIES sealed-box (`clave-volume`'s `seal_dek`, so the gateway holds nothing that can open it), doc 04
-§2). The device side closes the loop: **`clave-daemon`'s enrollment client** (`DeviceEnrollment::accept`)
-pins the tenant key, verifies the policy through it, and opens the volume key with its hardware key —
-producing exactly the material `Daemon::new` is built from. All over an Axum edge with sealed-cookie
-sessions — portable over in-memory seams, with real **Postgres** + **WorkOS** adapters
-(`--features server`) exercised against a live database. **255 tests** pass; `cargo clippy
---all-targets` is clean.
+## How it fits together
+
+- **Data plane & IPC.** The split-tunnel data plane is wired into the daemon's flow path
+  (`SplitRouter`), and an authenticated Unix-socket IPC transport carries the shim↔daemon contracts.
+- **Encrypted Clave Disk.** The crypto core (`clave-volume`) is driven by the daemon — encrypting at
+  rest, gating non-supervised callers, and crypto-shredding on wipe.
+- **Gateway sync.** Remote wipe/lock/policy commands are Ed25519-verified and replay-protected, with
+  a device-signed, hash-chained audit spool. A portable `GatewaySync` loop drives the
+  pull→apply→drain→ship exchange over a `GatewayLink` seam, with a real **mutual-TLS** link
+  (`clave-proto`'s `mtls` feature: a rustls connector/acceptor — each side presents a cert and
+  verifies the peer against pinned roots — producing the `TlsStream` the framed `transport` pump runs
+  over). The gateway sync loop also has a **live framed transport** (`clave-proto`'s `transport`
+  feature) that mTLS wraps in production.
+- **Honest enforcement posture.** Every OS capability reports an `EnforcementStatus` — `Enforced` vs
+  a `DevelopmentOnly` stand-in vs `Unavailable` — so a production build can't silently ship a
+  dev-only fallback (doc 14 §5.3).
+- **Platform adapters.** The macOS adapter (`clave-mac`) is a real `MacPlatform` reporting that
+  honest posture — the ES-fed supervisor and shared split-tunnel classifier are wired
+  (`DevelopmentOnly` until entitled), the rest `Unavailable` — plus the ES `AUTH_OPEN` volume gate
+  over the C ABI. The Windows adapter (`clave-win`) is the same `WindowsPlatform` shape, and the
+  daemon binary links the right one per target.
+- **Exec & path classification.** `classify_exec` matches a binary's **code-signature** against the
+  signed app allow-list (doc 02 §3.2), so only vetted apps (or children of supervised processes)
+  join the work zone, and each rule carries a `LaunchProfile` that resolves the app's HOME/temp
+  **inside** the encrypted Clave Disk (doc 03 §6, doc 04 §5). `classify_path` rounds out the portable
+  classifier trio (flow / exec / path): it tells the FS-redirection hook and the minifilter/ES gate
+  whether a path is work-data, system-COW, or pass-through (doc 03 §3.3). A **learn mode** synthesizes
+  candidate profiles from an app's observed footprint (doc 03 §6), and the **`clave-cli`** diagnostics
+  binary surfaces the enforcement posture and dry-runs the classifiers.
+- **Property & fault tests.** **`proptest`** tests pin the security-critical invariants (the
+  `decide`/classifier logic, XTS + AES-KW round-trips, the audit chain, panic-free verification of
+  untrusted bytes) across all inputs (doc 11 §6), and a fault-injection test confirms the volume is
+  fail-closed under a mid-write "pull-the-plug" (doc 04 §7).
+- **Clave launcher.** `Daemon::launchable_apps` lists the allow-listed work apps and `prepare_launch`
+  resolves each one's contained spawn spec — executable + env pointing into the encrypted disk
+  (doc 00 §5.2). The **Tauri desktop app** (`apps/clave-launcher/`, Rust + React/Tailwind/shadcn)
+  reaches these over the authenticated `clave-ipc` link (`LauncherClient` ↔ the daemon's
+  `handle_launcher_request`, doc 10 §3), falling back to a demo policy when no daemon is running; the
+  OS spawn+inject is the remaining layer. `clave-cli apps`/`launch` drive the same core from the
+  terminal.
+- **Enrollment & control plane.** The control-plane **gateway** (`clave-identity` + `clave-gateway`,
+  doc 15) rounds out enrollment: console login, device-enrollment handshake, **device registration**,
+  and the two doc 15 §9 step 5 enrollment artifacts a device receives on approval (the shared wire
+  contract is `clave-proto`'s `EnrollmentGrant`) — its **tenant-signed initial policy bundle**
+  (`PolicyIssuer` → a `SignedCommand` its pinned-key `GatewayVerifier` accepts) and its **wrapped
+  volume key** (`VolumeKeyService` → the Clave Disk DEK delivered to the device, either
+  AES-KW-wrapped to a symmetric KEK for the dev bootstrap or, in production, **sealed to the device's
+  X25519 hardware public key** via an ECIES sealed-box (`clave-volume`'s `seal_dek`, so the gateway
+  holds nothing that can open it), doc 04 §2). The device side closes the loop:
+  **`clave-daemon`'s enrollment client** (`DeviceEnrollment::accept`) pins the tenant key, verifies
+  the policy through it, and opens the volume key with its hardware key — producing exactly the
+  material `Daemon::new` is built from. All over an Axum edge with sealed-cookie sessions — portable
+  over in-memory seams, with real **Postgres** + **WorkOS** adapters (`--features server`) exercised
+  against a live database.
+- **Quality gate.** **255 tests** pass; `cargo clippy --all-targets` is clean.
 
 ## Crate map
 
