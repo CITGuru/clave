@@ -1,0 +1,18 @@
+[package]
+name = "clave-ipc"
+version = "0.1.0"
+edition = { workspace = true }
+license = { workspace = true }
+rust-version = { workspace = true }
+authors = { workspace = true }
+description = "Clave IPC message contracts and length-prefixed postcard framing."
+
+[dependencies]
+clave-platform = { path = "../clave-platform" }
+clave-core = { path = "../clave-core" }
+serde = { workspace = true }
+postcard = { version = "1", features = ["use-std"] }
+tokio = { version = "1", features = ["net", "io-util", "rt", "rt-multi-thread", "macros", "time"] }
+
+[dev-dependencies]
+proptest = { workspace = true }

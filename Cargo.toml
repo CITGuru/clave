@@ -1,0 +1,44 @@
+# Clave — Local Secure Enclave (Cargo workspace root)
+# Design docs: docs/
+#
+# Phase 1 (this milestone): the portable policy brain + the platform seam.
+# Builds and tests on any OS with no driver/entitlements
+[workspace]
+resolver = "2"
+members = [
+    "crates/clave-platform",
+    "crates/clave-core",
+    "crates/clave-identity",
+    "crates/clave-gateway",
+    "crates/clave-ipc",
+    "crates/clave-proto",
+    "crates/clave-cli",
+    "crates/clave-testkit",
+    "crates/clave-daemon",
+    "crates/clave-net",
+    "crates/clave-volume",
+    "crates/clave-mac",
+    "crates/clave-win",
+]
+# The Tauri desktop app (apps/clave-launcher/) builds with the Node + Tauri toolchain, not
+# `cargo test`, so it is kept out of the workspace to keep `cargo build/test/clippy` toolchain-free.
+exclude = ["apps/clave-launcher/src-tauri"]
+
+[workspace.package]
+edition = "2021"
+license = "Proprietary"
+rust-version = "1.80"
+authors = ["Clave"]
+
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+proptest = "1"
+zeroize = "1"
+
+# Keep the security-critical core small and fast; optimize tests reasonably.
+[profile.dev]
+opt-level = 0
+
+[profile.release]
+opt-level = 3
+lto = "thin"

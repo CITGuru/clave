@@ -1,0 +1,46 @@
+[package]
+name = "clave-proto"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "Clave gateway control plane: Ed25519-signed, replay-protected policy/lock/wipe commands."
+
+[features]
+default = []
+# The async framed transport (`transport` module): length-prefixed messages over a byte stream and
+# a channel-backed `GatewayLink`. The seam + signing work without it; this is the live data path
+# (the production mTLS link wraps a rustls stream with it). Mirrors clave-net's `wireguard`.
+transport = ["dep:tokio"]
+# The production **mutual-TLS** link (`mtls` module): a rustls connector/acceptor that produces the
+# authenticated `TlsStream` the `transport::pump` runs over. Device and gateway each present a
+# certificate and verify the peer's against pinned roots (doc 10 §2, doc 12 §3). Uses the `ring`
+# crypto provider to match the rest of the workspace tree (reqwest's rustls). Builds on `transport`.
+mtls = ["transport", "dep:tokio-rustls", "dep:rustls-pemfile"]
+
+[dependencies]
+clave-core = { path = "../clave-core" }
+serde = { workspace = true }
+tokio = { version = "1", features = ["io-util", "sync", "rt", "macros", "net"], optional = true }
+# Compact, schema-stable framing of the signed envelope — same codec as clave-ipc.
+postcard = { version = "1", features = ["use-std"] }
+# Detached Ed25519 (RFC 8032) signatures over the gateway envelope (doc 10 §2, doc 04 §6) and the
+# device-signed audit batches (doc 10 §6). Pure-Rust and curve25519-dalek-free, so it doesn't
+# clash with boringtun's pinned x25519-dalek rc in the workspace tree (clave-net, `wireguard`).
+ed25519-compact = "2"
+# SHA-256 for the tamper-evident audit hash chain (doc 10 §6, doc 04 §5).
+sha2 = "0.10"
+# mTLS link (feature `mtls`): rustls over tokio with the `ring` provider (matches the workspace),
+# plus PEM parsing for cert/key material loaded from the keystore at deploy time.
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12", "logging"], optional = true }
+rustls-pemfile = { version = "2", optional = true }
+
+[dev-dependencies]
+# Integration tests are a separate crate, so the regular deps they touch are re-declared here.
+clave-core = { path = "../clave-core" }
+postcard = { version = "1", features = ["use-std"] }
+proptest = { workspace = true }
+# The `mtls` tests mint a throwaway CA + leaf certs in-process (no fixtures on disk).
+rcgen = "0.13"
+tokio = { version = "1", features = ["io-util", "sync", "rt", "macros", "net"] }

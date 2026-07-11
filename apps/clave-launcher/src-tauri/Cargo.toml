@@ -1,0 +1,33 @@
+[package]
+name = "clave-launcher"
+version = "0.1.0"
+edition = "2021"
+description = "Clave launcher — desktop app (Tauri)."
+# Kept out of the Rust workspace (see ../../../Cargo.toml `exclude`): builds via the Tauri/Node
+# toolchain, not `cargo test`.
+
+[lib]
+name = "clave_launcher_lib"
+crate-type = ["lib", "cdylib", "staticlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+clave-core = { path = "../../../crates/clave-core" }
+clave-platform = { path = "../../../crates/clave-platform" }
+# The daemon↔UI link (doc 10 §3): the launcher asks clave-daemon for the catalog / launch spec /
+# posture over the authenticated Unix-socket transport. Falls back to the demo policy when the
+# daemon is not running (dev machine). The transport is Unix-only; the Windows build uses the demo
+# path until the named-pipe transport lands.
+clave-ipc = { path = "../../../crates/clave-ipc" }
+
+# The enforcement posture comes from this target's OS adapter (doc 14 §5.3).
+[target.'cfg(target_os = "macos")'.dependencies]
+clave-mac = { path = "../../../crates/clave-mac" }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+clave-win = { path = "../../../crates/clave-win" }

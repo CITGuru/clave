@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256" role="img" aria-label="Clave app icon">
+  <defs>
+    <linearGradient id="tile-bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#16243F"/>
+      <stop offset="1" stop-color="#0A0F1C"/>
+    </linearGradient>
+    <radialGradient id="tile-glow" cx="0.5" cy="0.46" r="0.5">
+      <stop offset="0" stop-color="#22D3EE" stop-opacity="0.20"/>
+      <stop offset="1" stop-color="#22D3EE" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="tile-mark" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#2DD4BF"/>
+      <stop offset="1" stop-color="#22D3EE"/>
+    </linearGradient>
+  </defs>
+
+  <!-- squircle with macOS-style margin; corners stay transparent -->
+  <rect x="20" y="20" width="216" height="216" rx="50" fill="url(#tile-bg)"/>
+  <rect x="20.75" y="20.75" width="214.5" height="214.5" rx="49.25"
+        fill="none" stroke="#2C3A55" stroke-width="1.5" opacity="0.7"/>
+
+  <!-- soft depth behind the mark -->
+  <circle cx="128" cy="124" r="66" fill="url(#tile-glow)"/>
+
+  <!-- the mark, bold enough to read at 16px -->
+  <g transform="translate(128 128) scale(0.74) translate(-128 -128)"
+     stroke-linecap="round" stroke-linejoin="round">
+    <path d="M90 62 L58 62 L58 194 L90 194" fill="none" stroke="url(#tile-mark)" stroke-width="16"/>
+    <path d="M166 62 L198 62 L198 194 L166 194" fill="none" stroke="url(#tile-mark)" stroke-width="16"/>
+    <rect x="108" y="108" width="40" height="40" rx="12" fill="url(#tile-mark)"/>
+  </g>
+</svg>

@@ -1,0 +1,59 @@
+[package]
+name = "clave-gateway"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "Clave control-plane gateway: console login, device enrollment, and authorization over the identity core (doc 15)."
+
+[features]
+default = []
+# Real Postgres-backed `Store` (sqlx). Off by default so `cargo test` needs no database.
+postgres = ["dep:sqlx", "dep:uuid"]
+# Real WorkOS-backed `IdentityProvider` (reqwest + JWKS verification). Off by default (needs network).
+workos = ["dep:reqwest", "dep:jsonwebtoken"]
+# The runnable production binary: both adapters + a tokio runtime to serve the router.
+server = ["postgres", "workos", "dep:tokio"]
+
+[dependencies]
+clave-identity = { path = "../clave-identity" }
+# The signed control plane: on enrollment the gateway issues the device a tenant-signed initial
+# policy bundle (doc 15 §9 step 5) its pinned-key `GatewayVerifier` accepts. `clave-core` supplies
+# the `PolicyBundle` carried inside that signed command.
+clave-proto = { path = "../clave-proto" }
+clave-core = { path = "../clave-core" }
+# Volume key hierarchy (doc 04 §2): the gateway AES-KW-wraps the workspace's Clave Disk DEK to the
+# enrolling device's KEK so only that device can unlock the disk (doc 15 §9 step 5).
+clave-volume = { path = "../clave-volume" }
+serde = { workspace = true }
+serde_json = "1"
+async-trait = "0.1"
+
+# HTTP edge (always on): the Axum control-plane router + the sealed-cookie session carrier.
+axum = "0.8"
+cookie = "0.18"
+chacha20poly1305 = "0.10"
+base64 = "0.22"
+rand = "0.8"
+
+# Optional adapters.
+sqlx = { version = "0.8", features = ["runtime-tokio", "postgres", "macros", "chrono", "uuid"], optional = true }
+uuid = { version = "1", features = ["v4", "serde"], optional = true }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"], optional = true }
+jsonwebtoken = { version = "9", optional = true }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal"], optional = true }
+
+[[bin]]
+name = "clave-gateway"
+path = "src/server_main.rs"
+required-features = ["server"]
+
+[dev-dependencies]
+# Integration tests are a separate crate, so deps they touch directly are re-declared here.
+tokio = { version = "1", features = ["rt", "macros"] }
+tower = { version = "0.5", features = ["util"] }
+axum = "0.8"
+serde_json = "1"
+# The wrapped-volume-key round-trip test unwraps the issued key with the device KEK.
+clave-volume = { path = "../clave-volume" }

@@ -1,0 +1,32 @@
+[package]
+name = "clave-volume"
+version = "0.1.0"
+edition = { workspace = true }
+license = { workspace = true }
+rust-version = { workspace = true }
+authors = { workspace = true }
+description = "Clave encrypted-volume crypto core: AES-256-XTS block layer, KEK/DEK hierarchy, crypto-shred."
+
+[dependencies]
+clave-platform = { path = "../clave-platform" }
+# Pure-Rust AES with the `zeroize` feature so expanded round keys are wiped when the cipher is
+# dropped on lock/wipe (doc 04 §7). AES-NI is engaged at runtime via target-feature detection.
+aes = { version = "0.8", features = ["zeroize"] }
+# AES-XTS over the `aes` block cipher (the FDE-standard mode; tweak = sector index).
+xts-mode = "0.5"
+# AES-KW (RFC 3394) key wrapping for the KEK→DEK hierarchy (doc 04 §2).
+aes-kw = "0.2"
+zeroize = { workspace = true }
+# OS CSPRNG for DEK/KEK generation (doc 04 §2). Already resolved in the workspace tree.
+getrandom = "0.2"
+# X25519 for the enrollment **sealed-box** (doc 04 §2, doc 15 §9 step 5): the gateway seals the DEK
+# to the device's hardware public key. Same crate clave-proto uses for Ed25519, so no curve25519-
+# dalek is pulled (it would clash with boringtun's pinned x25519-dalek).
+ed25519-compact = "2"
+# SHA-256 KDF over the ECDH shared secret.
+sha2 = "0.10"
+
+[dev-dependencies]
+# ZoneRegistry (a ProcessSupervisor) backs the runtime access gate in tests.
+clave-core = { path = "../clave-core" }
+proptest = { workspace = true }

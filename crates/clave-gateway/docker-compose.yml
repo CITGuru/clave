@@ -1,0 +1,53 @@
+# Local control-plane stack for clave-gateway (doc 15 §9).
+#
+#   docker compose -f crates/clave-gateway/docker-compose.yml up -d db   # just Postgres
+#   docker compose -f crates/clave-gateway/docker-compose.yml up --build # + the gateway
+#
+# The integration test runs the real PgStore SQL against `db`:
+#   CLAVE_TEST_DATABASE_URL=postgres://clave:clave@localhost:5432/clave \
+#     cargo test -p clave-gateway --features postgres --test postgres_store -- --nocapture
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: clave
+      POSTGRES_PASSWORD: clave
+      POSTGRES_DB: clave
+    ports:
+      # Override the host port if 5432 is taken: CLAVE_PG_PORT=5433 docker compose ... up -d db
+      - "${CLAVE_PG_PORT:-5432}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U clave -d clave"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+    volumes:
+      - clave_pgdata:/var/lib/postgresql/data
+
+  # The production gateway binary (--features server). Needs real WorkOS credentials in `.env`
+  # (copy `.env.example`) to serve auth; it boots, connects to `db`, and applies migrations on start.
+  gateway:
+    build:
+      context: ../..
+      dockerfile: crates/clave-gateway/Dockerfile
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgres://clave:clave@db:5432/clave
+      WORKOS_API_KEY: ${WORKOS_API_KEY:-sk_test_placeholder}
+      WORKOS_CLIENT_ID: ${WORKOS_CLIENT_ID:-client_placeholder}
+      WORKOS_ORG_ID: ${WORKOS_ORG_ID:-}
+      WORKSPACE_ID: ${WORKSPACE_ID:-1}
+      # 64 hex chars = the 32-byte session-sealing key. Generate: openssl rand -hex 32
+      SESSION_KEY: ${SESSION_KEY:-0000000000000000000000000000000000000000000000000000000000000000}
+      # Optional tenant signing seed (64 hex) — enables the signed initial-policy issuance.
+      GATEWAY_SIGNING_SEED: ${GATEWAY_SIGNING_SEED:-}
+      # Optional workspace Clave Disk DEK (128 hex) — enables wrapped-volume-key issuance.
+      GATEWAY_VOLUME_DEK: ${GATEWAY_VOLUME_DEK:-}
+      BIND: 0.0.0.0:8080
+    ports:
+      - "8080:8080"
+
+volumes:
+  clave_pgdata:

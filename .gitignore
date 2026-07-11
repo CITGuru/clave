@@ -1,0 +1,14 @@
+/target
+**/*.rs.bk
+.DS_Store
+.env
+
+.cursor
+.claude
+/docs/*.reference.md
+
+node_modules/
+dist/
+src-tauri/target/
+src-tauri/gen/
+*.local

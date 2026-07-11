@@ -1,0 +1,23 @@
+[package]
+name = "clave-win"
+version = "0.1.0"
+edition = { workspace = true }
+license = { workspace = true }
+rust-version = { workspace = true }
+authors = { workspace = true }
+description = "Windows platform adapter for Clave (WFP split-tunnel, minifilter, shim) — scaffold."
+
+[dependencies]
+clave-platform = { path = "../clave-platform" }
+clave-core = { path = "../clave-core" }
+clave-net = { path = "../clave-net" }
+
+# Real Windows dependencies live here so non-Windows CI never fetches or compiles them.
+# Uncomment when implementing on a Windows checkout (doc 08 §2, doc 11 Appendix A):
+[target.'cfg(windows)'.dependencies]
+# windows = { version = "0.58", features = [
+#   "Win32_NetworkManagement_WindowsFilteringPlatform",
+#   "Win32_Foundation", "Win32_System_Threading",
+# ] }
+# wintun = "0.5"
+# windivert = "0.6"   # user-mode prototype before committing to a WFP callout driver

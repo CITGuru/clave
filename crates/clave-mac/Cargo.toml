@@ -1,0 +1,17 @@
+[package]
+name = "clave-mac"
+version = "0.1.0"
+edition = { workspace = true }
+license = { workspace = true }
+rust-version = { workspace = true }
+authors = { workspace = true }
+description = "macOS platform adapter for Clave (Endpoint Security + Network Extension glue)."
+
+# `staticlib` so the Swift System Extensions can link the Rust core; `lib` for workspace use.
+[lib]
+crate-type = ["lib", "staticlib"]
+
+[dependencies]
+clave-platform = { path = "../clave-platform" }
+clave-core = { path = "../clave-core" }
+clave-net = { path = "../clave-net" }

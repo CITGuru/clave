@@ -1,0 +1,19 @@
+[package]
+name = "clave-net"
+version = "0.1.0"
+edition = { workspace = true }
+license = { workspace = true }
+rust-version = { workspace = true }
+authors = { workspace = true }
+description = "Clave shared network data plane: split-tunnel routing and the WireGuard tunnel seam."
+
+[features]
+default = []
+# Enables the boringtun-backed WireGuard tunnel (pulls the pure-Rust crypto stack). The
+# `Tunnel` trait seam works without it; this is the real data plane. See src/wireguard.rs.
+wireguard = ["dep:boringtun"]
+
+[dependencies]
+clave-platform = { path = "../clave-platform" }
+clave-core = { path = "../clave-core" }
+boringtun = { version = "0.6", optional = true }

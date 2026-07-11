@@ -1,0 +1,31 @@
+[package]
+name = "clave-daemon"
+version = "0.1.0"
+edition = { workspace = true }
+license = { workspace = true }
+rust-version = { workspace = true }
+authors = { workspace = true }
+description = "Clave privileged service: hosts the policy brain and drives the platform adapters."
+
+[dependencies]
+clave-platform = { path = "../clave-platform" }
+clave-core = { path = "../clave-core" }
+clave-ipc = { path = "../clave-ipc" }
+clave-net = { path = "../clave-net" }
+clave-volume = { path = "../clave-volume" }
+clave-proto = { path = "../clave-proto" }
+arc-swap = "1"
+serde = { workspace = true }
+postcard = { version = "1", features = ["use-std"] }
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "sync"] }
+
+# The OS adapter is linked per target (doc 11 §2).
+[target.'cfg(target_os = "macos")'.dependencies]
+clave-mac = { path = "../clave-mac" }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+clave-win = { path = "../clave-win" }
+
+[dev-dependencies]
+clave-testkit = { path = "../clave-testkit" }
+clave-proto = { path = "../clave-proto" }

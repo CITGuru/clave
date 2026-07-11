@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256" role="img" aria-label="Clave — monochrome">
+  <!-- uses currentColor so it adapts to text color; ideal for menu-bar / tray templates -->
+  <g fill="currentColor" stroke="currentColor" color="#E2E8F0">
+    <path d="M90 64 L60 64 L60 192 L90 192" fill="none"
+          stroke-width="13" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M166 64 L196 64 L196 192 L166 192" fill="none"
+          stroke-width="13" stroke-linecap="round" stroke-linejoin="round"/>
+    <rect x="110" y="110" width="36" height="36" rx="10" stroke="none"/>
+  </g>
+</svg>

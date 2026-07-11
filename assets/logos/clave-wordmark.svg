@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 520 160" width="520" height="160" role="img" aria-label="clave">
+  <defs>
+    <linearGradient id="wm-g" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#2DD4BF"/>
+      <stop offset="1" stop-color="#22D3EE"/>
+    </linearGradient>
+  </defs>
+  <!-- enclosing brackets -->
+  <path d="M70 44 L44 44 L44 116 L70 116" fill="none" stroke="url(#wm-g)"
+        stroke-width="9" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M450 44 L476 44 L476 116 L450 116" fill="none" stroke="url(#wm-g)"
+        stroke-width="9" stroke-linecap="round" stroke-linejoin="round"/>
+  <!-- wordmark (outline to paths for production; mono stack for this mockup) -->
+  <text x="260" y="80" text-anchor="middle" dominant-baseline="central"
+        font-family="'JetBrains Mono','SF Mono',ui-monospace,Menlo,Consolas,monospace"
+        font-size="76" font-weight="600" letter-spacing="6" fill="#E2E8F0">clave</text>
+</svg>

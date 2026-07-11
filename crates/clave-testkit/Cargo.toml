@@ -1,0 +1,12 @@
+[package]
+name = "clave-testkit"
+version = "0.1.0"
+edition = { workspace = true }
+license = { workspace = true }
+rust-version = { workspace = true }
+authors = { workspace = true }
+description = "In-memory Platform implementation for testing Clave with no OS."
+
+[dependencies]
+clave-platform = { path = "../clave-platform" }
+clave-core = { path = "../clave-core" }
