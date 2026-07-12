@@ -1,12 +1,7 @@
-//! "Learn mode": discover an app's footprint to synthesize a candidate launch profile.
-//!
-//! App-compat is "the unglamorous 60%". Rather than hand-author every [`LaunchProfile`], run a new
-//! app in **notify-only** mode — the OS layer reports what it touches without redirecting or
-//! denying — and accumulate the accesses here. [`LearnSession::synthesize`] turns them into a
-//! *candidate* the admin curates: the directories it wrote to become
-//! [`FilePolicy::work_data_roots`](crate::policy::FilePolicy), and a named-object sighting suggests
-//! the work instance needs a namespace prefix to coexist with personal. Portable and
-//! OS-free; the OS layer only supplies the [`Observation`]s.
+//! "Learn mode": run a new app in notify-only mode, accumulate what it touches, and
+//! [`LearnSession::synthesize`] a candidate [`LaunchProfile`] the admin curates — directories it
+//! wrote to become [`FilePolicy::work_data_roots`](crate::policy::FilePolicy), and a named-object
+//! sighting suggests a namespace prefix.
 
 use crate::app::{AppId, LaunchProfile};
 use crate::path::under;
@@ -90,6 +85,8 @@ impl LearnSession {
         let namespace_prefix = uses_named_objects.then(|| format!("Clave-{}\\", self.app_id.0));
         let launch = LaunchProfile {
             home_subdir: self.app_id.0.clone(),
+            container: Default::default(),
+            args: Vec::new(),
             env: Vec::new(),
             namespace_prefix,
             hive_seed: None,

@@ -14,18 +14,24 @@ pub mod audit;
 pub mod decide;
 pub mod learn;
 pub mod net;
+pub mod overlay;
 pub mod path;
 pub mod policy;
 pub mod zone;
 
 pub use app::{
-    classify_exec, AppId, AppPolicy, AppRule, BinaryMatch, ExecVerdict, LaunchProfile, LaunchSpec,
-    LaunchableApp, ResolvedLaunch,
+    classify_exec, AppId, AppPolicy, AppRule, BinaryMatch, ContainerKind, ExecVerdict,
+    LaunchProfile, LaunchSpec, LaunchableApp, ResolvedLaunch,
 };
 pub use audit::{AuditAction, AuditEvent, AuditSink, NoopAuditSink};
 pub use decide::{clip_decision, decide, Access, Action, Reason, Verdict};
 pub use learn::{LearnSession, LearnedProfile, Observation};
 pub use net::classify_flow;
+pub use overlay::{
+    recompute_frames, recompute_frames_themed, BorderCfg, Frame, RectPx, WindowGeom,
+};
 pub use path::{classify_path, PathClass};
-pub use policy::{ClipboardPolicy, FilePolicy, NetworkPolicy, PolicyBundle, UnixTime};
+pub use policy::{
+    ClipboardPolicy, FilePolicy, NetworkPolicy, OverlayPolicy, PolicyBundle, UnixTime,
+};
 pub use zone::{JoinReason, ZoneMember, ZoneRegistry};

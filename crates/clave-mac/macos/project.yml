@@ -1,0 +1,83 @@
+# XcodeGen spec for the Clave macOS Endpoint Security host.
+#
+# Regenerate the .xcodeproj with:  xcodegen generate   (run from this directory)
+#
+# This produces two targets:
+#   * ClaveES           — a minimal containing app that activates the system extension.
+#   * ClaveESExtension  — the Endpoint Security System Extension; links the Rust core
+#                         (libclave_mac.a) and enforces the portable core's verdicts.
+#
+# LOCAL DEV ONLY: signed by the self-signed "Clave Dev Code Signing" identity and run on a
+# SIP-disabled Mac (Track C, doc 14 §2.3). The restricted ES entitlement is honored only because
+# SIP is off. This is NOT a shippable signing path — production needs a Developer ID + Apple's
+# approved ES entitlement on a stock, SIP-enabled Mac (doc 14 §1, §5.4).
+
+name: ClaveES
+options:
+  bundleIdPrefix: com.clave
+  deploymentTarget:
+    macOS: "13.0"
+  createIntermediateGroups: true
+
+settings:
+  base:
+    CODE_SIGN_STYLE: Manual
+    CODE_SIGN_IDENTITY: "Clave Dev Code Signing"
+    DEVELOPMENT_TEAM: ""
+    ENABLE_HARDENED_RUNTIME: YES
+    SWIFT_VERSION: "5.0"
+    # The Rust staticlib is emitted to the workspace target dir (three levels up from here).
+    CLAVE_RUST_LIB_DIR: "$(PROJECT_DIR)/../../../target/release"
+
+targets:
+  # ---------------------------------------------------------------------------
+  ClaveES:
+    type: application
+    platform: macOS
+    sources:
+      - ClaveES
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.clave.ClaveES
+        INFOPLIST_FILE: ClaveES/Info.plist
+        CODE_SIGN_ENTITLEMENTS: ClaveES/ClaveES.entitlements
+        LD_RUNPATH_SEARCH_PATHS: "$(inherited) @executable_path/../Frameworks"
+    dependencies:
+      - target: ClaveESExtension
+        embed: true
+        codeSign: true
+
+  # ---------------------------------------------------------------------------
+  ClaveESExtension:
+    type: system-extension
+    platform: macOS
+    sources:
+      - ClaveESExtension
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.clave.ClaveES.ESClient
+        INFOPLIST_FILE: ClaveESExtension/Info.plist
+        CODE_SIGN_ENTITLEMENTS: ClaveESExtension/ClaveESExtension.entitlements
+        # Link the Rust core + every system lib its staticlib pulls in (from
+        # `--print native-static-libs`), plus the Endpoint Security C library.
+        LIBRARY_SEARCH_PATHS: "$(inherited) $(CLAVE_RUST_LIB_DIR)"
+        OTHER_LDFLAGS: >-
+          $(inherited)
+          -lclave_mac
+          -lEndpointSecurity
+          -lobjc
+          -liconv
+          -framework AppKit
+          -framework QuartzCore
+          -framework Foundation
+          -framework CoreGraphics
+          -framework CoreFoundation
+    preBuildScripts:
+      - name: Build Rust core (libclave_mac.a)
+        basedOnDependencyAnalysis: false
+        script: |
+          set -euo pipefail
+          cd "$PROJECT_DIR/../../.."
+          # Cargo lives outside Xcode's PATH under some launch contexts.
+          export PATH="$HOME/.cargo/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
+          cargo build -p clave-mac --release

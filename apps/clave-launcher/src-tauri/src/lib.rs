@@ -1,17 +1,12 @@
 //! Clave launcher desktop app (Tauri) — backend.
 //!
-//! Thin Tauri commands that ask the privileged **`clave-daemon`** for the launch catalog, a
-//! contained launch spec, and the OS adapter's enforcement posture, over the authenticated
-//! Unix-socket IPC link (`clave_ipc::transport::LauncherClient`). The frontend (React +
-//! Tailwind + shadcn/ui, in `../src`) calls these via `invoke`.
-//!
-//! **Fallback.** When the daemon is not running — a dev machine with no enrolled enclave, or the
-//! Windows build before the named-pipe transport lands — each command falls back to an embedded
-//! **demo policy** + fixed mount so the UI stays runnable end-to-end. The socket path is
-//! `$CLAVE_LAUNCHER_SOCK`, else `<temp>/clave-launcher.sock`. The *actual* launch (OS spawn+inject)
-//! remains the OS layer; these commands resolve and surface the spec the daemon vetted.
+//! Thin Tauri commands that ask the privileged `clave-daemon` for the launch catalog, a contained
+//! launch spec, and the enforcement posture over the authenticated Unix-socket IPC link; the React
+//! frontend calls these via `invoke`. When no daemon is running, each command falls back to an
+//! embedded demo policy so the UI stays runnable. Socket path: `$CLAVE_LAUNCHER_SOCK`, else
+//! `<temp>/clave-launcher.sock`.
 
-use clave_core::{AppId, AppPolicy, AppRule, BinaryMatch, PolicyBundle};
+use clave_core::{AppId, AppPolicy, AppRule, BinaryMatch, LaunchProfile, PolicyBundle};
 use serde::Serialize;
 
 /// Demo mount point used only by the fallback. With the daemon connected, the spec's env already
@@ -46,6 +41,7 @@ pub struct AppInfo {
 #[derive(Serialize)]
 pub struct LaunchInfo {
     executable: String,
+    args: Vec<String>,
     env: Vec<(String, String)>,
     namespace_prefix: Option<String>,
 }
@@ -70,24 +66,30 @@ fn app(id: &str, signing: &str, name: &str, exec: &str) -> AppRule {
     .with_executable(exec)
 }
 
+/// Chromium/Electron apps launch with a private `--user-data-dir` so they run contained instead of
+/// handing off to the user's personal instance (see [`LaunchProfile::chromium`]).
+fn chromium_app(id: &str, signing: &str, name: &str, exec: &str) -> AppRule {
+    app(id, signing, name, exec).with_launch(LaunchProfile::chromium())
+}
+
 /// A stand-in for the signed policy the daemon would supply — a representative set of work apps so
 /// the launcher grid is populated on a dev machine.
 fn demo_policy() -> PolicyBundle {
     let mut pol = PolicyBundle::restrictive_default();
     pol.apps = AppPolicy {
         allow: vec![
-            app("chrome-work", "com.google.Chrome", "Google Chrome", "/Applications/Google Chrome.app"),
+            chromium_app("chrome-work", "com.google.Chrome", "Google Chrome", "/Applications/Google Chrome.app"),
             app("excel-work", "com.microsoft.Excel", "Excel", "/Applications/Microsoft Excel.app"),
             app("word-work", "com.microsoft.Word", "Word", "/Applications/Microsoft Word.app"),
             app("outlook-work", "com.microsoft.Outlook", "Outlook", "/Applications/Microsoft Outlook.app"),
             app("files-work", "com.apple.finder", "Files", "/System/Library/CoreServices/Finder.app"),
             app("powerpoint-work", "com.microsoft.Powerpoint", "PowerPoint", "/Applications/Microsoft PowerPoint.app"),
-            app("edge-work", "com.microsoft.edgemac", "Edge", "/Applications/Microsoft Edge.app"),
+            chromium_app("edge-work", "com.microsoft.edgemac", "Edge", "/Applications/Microsoft Edge.app"),
             app("academy-work", "ai.finic.academy", "Clave Academy", "/Applications/Clave Academy.app"),
             app("acrobat-work", "com.adobe.Acrobat.Pro", "Adobe Acrobat", "/Applications/Adobe Acrobat.app"),
             app("clavework-work", "ai.finic.work", "Clave Work", "/Applications/Clave Work.app"),
-            app("teams-work", "com.microsoft.teams2", "Teams", "/Applications/Microsoft Teams.app"),
-            app("slack-work", "com.tinyspeck.slackmacgap", "Slack", "/Applications/Slack.app"),
+            chromium_app("teams-work", "com.microsoft.teams2", "Teams", "/Applications/Microsoft Teams.app"),
+            chromium_app("slack-work", "com.tinyspeck.slackmacgap", "Slack", "/Applications/Slack.app"),
         ],
     };
     pol
@@ -112,9 +114,8 @@ async fn list_apps() -> Vec<AppInfo> {
     demo_apps()
 }
 
-/// Resolve the contained spawn spec for an app. The real launch (spawn suspended +
-/// inject/mark + resume) is the OS layer; this returns what it would execute. With the daemon
-/// connected, the daemon is authoritative — an unknown app yields `None`, not the demo spec.
+/// Resolve the contained spawn spec for an app (what a launch would execute). With the daemon
+/// connected it is authoritative — an unknown app yields `None`, not the demo spec.
 #[tauri::command]
 async fn launch_spec(app_id: String) -> Option<LaunchInfo> {
     #[cfg(unix)]
@@ -124,6 +125,21 @@ async fn launch_spec(app_id: String) -> Option<LaunchInfo> {
         }
     }
     demo_launch_spec(&app_id)
+}
+
+/// Spawn one app contained and seed it into the supervised zone set. Requires a running daemon;
+/// returns the pid, or `None` if there's no daemon or the launch was refused. The demo fallback
+/// never spawns — only a real daemon owns process supervision.
+#[tauri::command]
+async fn launch_app(app_id: String) -> Option<u32> {
+    #[cfg(unix)]
+    if let Some(mut client) = daemon().await {
+        if let Ok(pid) = client.launch(AppId(app_id.clone())).await {
+            return pid;
+        }
+    }
+    let _ = app_id;
+    None
 }
 
 /// This target's OS-adapter enforcement posture: the daemon's live report, or a
@@ -148,6 +164,7 @@ async fn enforcement() -> Vec<CapStatus> {
 fn to_launch_info(s: clave_core::LaunchSpec) -> LaunchInfo {
     LaunchInfo {
         executable: s.executable,
+        args: s.args,
         env: s.env,
         namespace_prefix: s.namespace_prefix,
     }
@@ -207,7 +224,12 @@ fn report() -> Vec<(String, String)> {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![list_apps, launch_spec, enforcement])
+        .invoke_handler(tauri::generate_handler![
+            list_apps,
+            launch_spec,
+            launch_app,
+            enforcement
+        ])
         .run(tauri::generate_context!())
         .expect("error while running the Clave app");
 }

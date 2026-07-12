@@ -1,12 +1,6 @@
-//! The in-memory zone-membership mirror.
-//!
-//! The **authoritative** set lives in the kernel driver (Windows) / Endpoint Security client
-//! (macOS), keyed on a kernel-supplied identity. This is the portable mirror the policy brain
-//! reads, kept in sync via the driver/ESF event stream.
-//!
-//! Phase 1 uses a `RwLock<HashMap>` — correct and simple. The hot-path production version may
-//! swap in a sharded/lock-free map; the public API here is deliberately stable so
-//! that swap is invisible to callers.
+//! The in-memory zone-membership mirror. The authoritative set lives in the kernel driver
+//! (Windows) / Endpoint Security client (macOS); this is the portable mirror the policy brain reads,
+//! kept in sync via the driver/ESF event stream.
 
 use clave_platform::{ProcId, ProcessSupervisor};
 use std::collections::HashMap;
@@ -69,6 +63,21 @@ impl ZoneRegistry {
             .copied()
     }
 
+    /// The OS process ids of every supervised process — the macOS Clave Edge overlay matches
+    /// `CGWindowList` owner pids against this set. Deduplicated; order unspecified.
+    pub fn supervised_pids(&self) -> Vec<u32> {
+        let mut pids: Vec<u32> = self
+            .members
+            .read()
+            .expect("zone lock poisoned")
+            .keys()
+            .map(|id| id.pid())
+            .collect();
+        pids.sort_unstable();
+        pids.dedup();
+        pids
+    }
+
     pub fn len(&self) -> usize {
         self.members.read().expect("zone lock poisoned").len()
     }
@@ -87,8 +96,7 @@ impl ZoneRegistry {
     }
 }
 
-/// The core's mirror can itself serve as a [`ProcessSupervisor`] for tests and for the
-/// `MockPlatform`. Production uses the driver-backed implementation instead.
+/// The core's mirror can serve as a [`ProcessSupervisor`] for tests and the `MockPlatform`.
 impl ProcessSupervisor for ZoneRegistry {
     fn is_supervised(&self, p: &ProcId) -> bool {
         ZoneRegistry::is_supervised(self, p)

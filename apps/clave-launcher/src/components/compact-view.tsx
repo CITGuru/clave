@@ -3,17 +3,20 @@
 // single column for a slim window. Shown by App.tsx below the responsive width threshold.
 import { useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { ChevronDown, ChevronRight, Search, Shield, ShieldCheck } from "lucide-react";
+import {
+  ChevronDown,
+  ChevronRight,
+  Loader2,
+  Search,
+  Shield,
+  ShieldCheck,
+} from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import { visualFor } from "@/lib/app-visual";
+import { launchApp } from "@/lib/launch";
 
 type AppInfo = { id: string; label: string };
-type LaunchInfo = {
-  executable: string;
-  env: [string, string][];
-  namespace_prefix: string | null;
-};
 type CapStatus = { capability: string; status: string };
 
 const dot = (s: string): string =>
@@ -35,6 +38,7 @@ export function CompactView() {
   const [query, setQuery] = useState("");
   const [toast, setToast] = useState<string | null>(null);
   const [showPosture, setShowPosture] = useState(false);
+  const [launching, setLaunching] = useState<Set<string>>(new Set());
 
   useEffect(() => {
     invoke<AppInfo[]>("list_apps").then(setApps).catch(console.error);
@@ -50,17 +54,32 @@ export function CompactView() {
   );
   const issues = posture.filter((c) => c.status === "development-only").length;
 
+  function flashToast(msg: string) {
+    setToast(msg);
+    window.setTimeout(() => setToast(null), 2600);
+  }
+
   async function launch(app: AppInfo) {
+    if (launching.has(app.id)) return;
+    setLaunching((s) => new Set(s).add(app.id));
     try {
-      const spec = await invoke<LaunchInfo | null>("launch_spec", {
-        appId: app.id,
-      });
-      if (spec) {
-        setToast(`Launching ${app.label} — contained`);
-        window.setTimeout(() => setToast(null), 2400);
+      const res = await launchApp(app.id);
+      if (res.kind === "launched") {
+        flashToast(`Launched ${app.label} — contained · pid ${res.pid}`);
+      } else if (res.kind === "resolved") {
+        flashToast(`${app.label} resolved — start the daemon to launch`);
+      } else {
+        flashToast(`Couldn’t launch ${app.label}`);
       }
     } catch (e) {
       console.error(e);
+      flashToast(`Couldn’t launch ${app.label}`);
+    } finally {
+      setLaunching((s) => {
+        const n = new Set(s);
+        n.delete(app.id);
+        return n;
+      });
     }
   }
 
@@ -88,25 +107,39 @@ export function CompactView() {
       <main className="flex-1 overflow-y-auto px-2 pb-2">
         {filtered.map((app) => {
           const { Icon, bg } = visualFor(app.label);
+          const busy = launching.has(app.id);
           return (
             <button
               key={app.id}
               type="button"
+              disabled={busy}
               onClick={() => launch(app)}
-              className="group flex w-full items-center gap-3 rounded-xl px-2 py-1.5 text-left transition-colors hover:bg-zinc-100"
+              className="group flex w-full items-center gap-3 rounded-xl px-2 py-1.5 text-left transition-colors hover:bg-zinc-100 disabled:cursor-default"
             >
               <span
                 className={cn(
-                  "grid h-10 w-10 shrink-0 place-items-center rounded-[13px] text-white shadow-sm ring-1 ring-black/5",
+                  "relative grid h-10 w-10 shrink-0 place-items-center rounded-[13px] text-white shadow-sm ring-1 ring-black/5",
                   bg,
                 )}
               >
-                <Icon className="h-5 w-5" strokeWidth={2} />
+                <Icon
+                  className={cn("h-5 w-5 transition-opacity", busy && "opacity-30")}
+                  strokeWidth={2}
+                />
+                {busy && (
+                  <span className="absolute inset-0 grid place-items-center">
+                    <Loader2 className="h-4 w-4 animate-spin" strokeWidth={2.4} />
+                  </span>
+                )}
               </span>
               <span className="min-w-0 flex-1 truncate text-[13px] font-medium">
                 {app.label}
               </span>
-              <ChevronRight className="h-4 w-4 shrink-0 text-zinc-300 transition-colors group-hover:text-zinc-500" />
+              {busy ? (
+                <Loader2 className="h-4 w-4 shrink-0 animate-spin text-zinc-400" />
+              ) : (
+                <ChevronRight className="h-4 w-4 shrink-0 text-zinc-300 transition-colors group-hover:text-zinc-500" />
+              )}
             </button>
           );
         })}

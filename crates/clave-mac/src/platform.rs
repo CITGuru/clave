@@ -1,15 +1,9 @@
 //! [`MacPlatform`] — the daemon-side macOS [`Platform`] adapter.
 //!
-//! This is the object a `clave-daemon` runs on macOS. Two capabilities are wired to real Rust
-//! decision logic that the System Extensions drive over XPC (deferred): **process supervision**
-//! (the ES-fed zone mirror) and **network split-tunnel** (the shared `clave-net` classifier — the
-//! same decision the FFI and Windows use). The rest are honest stubs for unbuilt subsystems.
-//!
-//! Crucially, [`Platform::enforcement`] reports each capability's *true* posture, so a production
-//! build refuses to claim a control it doesn't actually enforce: nothing here reaches
-//! `Enforced`. The ES/NE paths are `DevelopmentOnly` (they need the entitlements / a SIP-disabled
-//! lab Mac); the unbuilt subsystems are `Unavailable`. A real adapter recomputes these
-//! at runtime as it detects the extensions connecting, entitlements present, and SIP state.
+//! Process supervision (the ES-fed zone mirror) and network split-tunnel (the shared `clave-net`
+//! classifier) are wired to real decision logic; the rest are honest stubs. [`Platform::enforcement`]
+//! reports each capability's true posture — nothing here reaches `Enforced`: the ES/NE paths are
+//! `DevelopmentOnly` (need entitlements / a SIP-disabled Mac), the unbuilt subsystems `Unavailable`.
 
 use std::sync::{Arc, Mutex};
 
@@ -19,6 +13,8 @@ use clave_platform::{
     NetworkTunnel, PResult, Platform, ProcId, ProcessSupervisor, Rgba, Route, ScreenGuard,
     VolumeMount, WindowId, WindowOverlay, Zone,
 };
+
+use crate::sip::SipStatus;
 
 /// Split-tunnel routing via the shared classifier — the same decision as Windows and the FFI path.
 pub struct MacNetwork {
@@ -31,16 +27,20 @@ impl NetworkTunnel for MacNetwork {
     }
 }
 
-/// The encrypted-volume mount (encrypted APFS / sparsebundle) — not built yet.
+/// The encrypted-volume mount (encrypted APFS / sparsebundle) — not built yet. A lab build may set a
+/// dev mount point so contained launch specs resolve before the real mount exists; the volume's
+/// [`EnforcementStatus`] stays `Unavailable`.
 #[derive(Default)]
-pub struct MacVolumeMount;
+pub struct MacVolumeMount {
+    dev_mount_point: Option<String>,
+}
 
 impl VolumeMount for MacVolumeMount {
     fn is_mounted(&self) -> bool {
-        false
+        self.dev_mount_point.is_some()
     }
     fn mount_point(&self) -> Option<String> {
-        None
+        self.dev_mount_point.clone()
     }
     fn request_wipe(&self) -> PResult<()> {
         // The authoritative crypto-shred is the volume core's job (`clave-volume`); with no OS
@@ -75,13 +75,38 @@ impl ScreenGuard for MacScreen {
     }
 }
 
-/// Clave Edge overlay — Phase 5. No overlay yet.
-#[derive(Default)]
-pub struct MacOverlay;
+/// Windows explicitly tracked as work windows (via the shim/ES path) plus the color to frame each
+/// with. Shared (`Arc`) so the native drawer can read the current set.
+pub type TrackedWindows = Arc<Mutex<std::collections::HashMap<WindowId, Rgba>>>;
+
+/// Clave Edge overlay bookkeeping: the explicitly-tracked window set. The pixels are drawn by the
+/// native drawer, which also discovers launched-app windows by owner pid. A dev-grade affordance,
+/// never `Enforced`.
+#[derive(Clone, Default)]
+pub struct MacOverlay {
+    tracked: TrackedWindows,
+}
+
+impl MacOverlay {
+    /// The shared handle to the tracked-window set, for a native drawer to read.
+    pub fn tracked_handle(&self) -> TrackedWindows {
+        Arc::clone(&self.tracked)
+    }
+}
 
 impl WindowOverlay for MacOverlay {
-    fn track(&self, _w: WindowId, _color: Rgba) {}
-    fn untrack(&self, _w: WindowId) {}
+    fn track(&self, w: WindowId, color: Rgba) {
+        self.tracked
+            .lock()
+            .expect("overlay lock poisoned")
+            .insert(w, color);
+    }
+    fn untrack(&self, w: WindowId) {
+        self.tracked
+            .lock()
+            .expect("overlay lock poisoned")
+            .remove(&w);
+    }
 }
 
 /// Input isolation — Phase 6, optional. Not protected.
@@ -117,18 +142,53 @@ impl MacPlatform {
         Self {
             zones,
             network,
-            volume: MacVolumeMount,
+            volume: MacVolumeMount::default(),
             clipboard: MacClipboard,
             screen: MacScreen,
-            overlay: MacOverlay,
+            overlay: MacOverlay::default(),
             input: MacInput,
             enforcement: Mutex::new(default_enforcement()),
         }
     }
 
-    /// Update a capability's reported posture. A production adapter calls this at runtime as it
-    /// detects the System Extensions connecting, entitlements present, SIP state, etc. Nothing
-    /// should be set to `Enforced` unless running on a stock, properly-signed/entitled OS.
+    /// Reconcile the ES/NE posture with the machine's live SIP state, returning the applied
+    /// [`SipStatus`]. The dev enforcement path is an unsigned extension that only loads on a
+    /// SIP-disabled Mac: SIP disabled → `DevelopmentOnly`, else `Unavailable`. Never `Enforced`.
+    pub fn apply_sip_posture(&self, sip: SipStatus) -> SipStatus {
+        let status = if sip.is_disabled() {
+            EnforcementStatus::DevelopmentOnly
+        } else {
+            EnforcementStatus::Unavailable
+        };
+        self.set_enforcement(Capability::ProcessSupervision, status);
+        self.set_enforcement(Capability::Network, status);
+        sip
+    }
+
+    /// Detect the live SIP state and apply it via [`MacPlatform::apply_sip_posture`].
+    pub fn detect_and_apply_sip_posture(&self) -> SipStatus {
+        self.apply_sip_posture(SipStatus::detect())
+    }
+
+    /// The shared zone mirror — the native Clave Edge drawer reads `supervised_pids()` from it to
+    /// pick which on-screen windows to frame.
+    pub fn zones(&self) -> Arc<ZoneRegistry> {
+        Arc::clone(&self.zones)
+    }
+
+    /// The shared handle to the explicitly-tracked window set (shim/ES `WindowCreated` path).
+    pub fn overlay_tracked(&self) -> TrackedWindows {
+        self.overlay.tracked_handle()
+    }
+
+    /// Set a dev Clave Disk mount point so a lab daemon can resolve contained launch specs before the
+    /// real mount exists. Does not promote the volume's enforcement posture (stays `Unavailable`).
+    pub fn set_dev_mount_point(&mut self, path: impl Into<String>) {
+        self.volume.dev_mount_point = Some(path.into());
+    }
+
+    /// Update a capability's reported posture (a production adapter calls this as it detects
+    /// extensions connecting, entitlements, SIP state, etc.).
     pub fn set_enforcement(&self, cap: Capability, status: EnforcementStatus) {
         for e in self
             .enforcement
@@ -143,9 +203,7 @@ impl MacPlatform {
     }
 }
 
-/// Honest defaults for the current scaffold: the ES/NE paths have real Rust decision logic but only
-/// dev-grade enforcement (they need entitlements / a SIP-disabled Mac); the unbuilt
-/// subsystems are `Unavailable`.
+/// Honest defaults: the ES/NE paths are `DevelopmentOnly`; the unbuilt subsystems are `Unavailable`.
 fn default_enforcement() -> [(Capability, EnforcementStatus); Capability::COUNT] {
     use Capability::*;
     use EnforcementStatus::*;
@@ -240,6 +298,53 @@ mod tests {
             r.status(Capability::Clipboard),
             EnforcementStatus::Unavailable
         );
+    }
+
+    #[test]
+    fn sip_disabled_keeps_es_ne_paths_development_only() {
+        let p = platform();
+        p.apply_sip_posture(SipStatus::Disabled);
+        let r = p.enforcement_report();
+        assert_eq!(
+            r.status(Capability::ProcessSupervision),
+            EnforcementStatus::DevelopmentOnly
+        );
+        assert_eq!(
+            r.status(Capability::Network),
+            EnforcementStatus::DevelopmentOnly
+        );
+        assert!(!r.is_production_ready());
+    }
+
+    #[test]
+    fn sip_enabled_without_entitlement_makes_es_ne_paths_unavailable() {
+        let p = platform();
+        // SIP on and no entitled extension connected: an unsigned dev extension can't load, so the
+        // honest posture is that nothing can enforce these yet.
+        for sip in [SipStatus::Enabled, SipStatus::Unknown] {
+            p.apply_sip_posture(sip);
+            let r = p.enforcement_report();
+            assert_eq!(
+                r.status(Capability::ProcessSupervision),
+                EnforcementStatus::Unavailable
+            );
+            assert_eq!(r.status(Capability::Network), EnforcementStatus::Unavailable);
+        }
+    }
+
+    #[test]
+    fn overlay_records_and_forgets_tracked_windows() {
+        let p = platform();
+        let tracked = p.overlay_tracked();
+        assert!(tracked.lock().unwrap().is_empty());
+        p.overlay().track(WindowId(7), Rgba::CLAVE_EDGE);
+        p.overlay().track(WindowId(9), Rgba::CLAVE_EDGE);
+        let mut ids: Vec<u64> = tracked.lock().unwrap().keys().map(|w| w.0).collect();
+        ids.sort_unstable();
+        assert_eq!(ids, vec![7, 9]);
+        p.overlay().untrack(WindowId(7));
+        let ids: Vec<u64> = tracked.lock().unwrap().keys().map(|w| w.0).collect();
+        assert_eq!(ids, vec![9]);
     }
 
     #[test]

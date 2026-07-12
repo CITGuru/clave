@@ -12,3 +12,7 @@ dist/
 src-tauri/target/
 src-tauri/gen/
 *.local
+
+# Xcode build output for the macOS System Extension host
+crates/clave-mac/macos/build/
+xcuserdata/

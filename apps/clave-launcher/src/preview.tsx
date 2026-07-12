@@ -35,9 +35,12 @@ const POSTURE = [
   invoke: async (cmd: string) => {
     if (cmd === "list_apps") return APPS;
     if (cmd === "enforcement") return POSTURE;
+    // Simulate a connected daemon so the preview shows the real spawn-and-supervise success path.
+    if (cmd === "launch_app") return 4242 + Math.floor(Math.random() * 1000);
     if (cmd === "launch_spec")
       return {
         executable: "/Applications/Demo.app",
+        args: ["--user-data-dir=/Volumes/ClaveDisk/profiles/demo"],
         env: [["HOME", "/Volumes/ClaveDisk/profiles/demo"]],
         namespace_prefix: null,
       };

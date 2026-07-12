@@ -1,0 +1,440 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		402005A5605B82A9B8FA8847 /* main.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1F6C90EA132D60BC6CED479E /* main.swift */; };
+		6C699B232AF25F27E38AFAFA /* ClaveESExtension.systemextension in Embed System Extensions */ = {isa = PBXBuildFile; fileRef = 5FBF611836DAB4D24BAEC379 /* ClaveESExtension.systemextension */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
+		6C830529B6642665FE2CEFFD /* main.swift in Sources */ = {isa = PBXBuildFile; fileRef = A980D205CF137C95E7739254 /* main.swift */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		7EBFA6B9CED1D36C1FA43705 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 071055B3204654F5A2AA7213 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = B1625802507F2A5A0C6980AA;
+			remoteInfo = ClaveESExtension;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		35322C253C45739C9363BBF5 /* Embed System Extensions */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "$(SYSTEM_EXTENSIONS_FOLDER_PATH)";
+			dstSubfolderSpec = 16;
+			files = (
+				6C699B232AF25F27E38AFAFA /* ClaveESExtension.systemextension in Embed System Extensions */,
+			);
+			name = "Embed System Extensions";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
+
+/* Begin PBXFileReference section */
+		1F6C90EA132D60BC6CED479E /* main.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = main.swift; sourceTree = "<group>"; };
+		5FBF611836DAB4D24BAEC379 /* ClaveESExtension.systemextension */ = {isa = PBXFileReference; explicitFileType = "wrapper.system-extension"; includeInIndex = 0; path = ClaveESExtension.systemextension; sourceTree = BUILT_PRODUCTS_DIR; };
+		7C3ADC7E4170E9AD023EE2EC /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
+		8D375262D2EF9E5AF5E83817 /* ClaveESExtension.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = ClaveESExtension.entitlements; sourceTree = "<group>"; };
+		A980D205CF137C95E7739254 /* main.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = main.swift; sourceTree = "<group>"; };
+		B88F29783B2FCAAA43A7E101 /* ClaveES.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = ClaveES.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		C8B19C6109031E901D86959E /* ClaveES.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = ClaveES.entitlements; sourceTree = "<group>"; };
+		E4E2BBED8A4E937F239B3D2C /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXGroup section */
+		4DA5EF55F65EED0D754914C8 = {
+			isa = PBXGroup;
+			children = (
+				6377987D9BD303BB25F1226B /* ClaveES */,
+				E0F18321BDB54D3E4D84A460 /* ClaveESExtension */,
+				719985330E39129E790ECDB2 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		6377987D9BD303BB25F1226B /* ClaveES */ = {
+			isa = PBXGroup;
+			children = (
+				C8B19C6109031E901D86959E /* ClaveES.entitlements */,
+				E4E2BBED8A4E937F239B3D2C /* Info.plist */,
+				A980D205CF137C95E7739254 /* main.swift */,
+			);
+			path = ClaveES;
+			sourceTree = "<group>";
+		};
+		719985330E39129E790ECDB2 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				B88F29783B2FCAAA43A7E101 /* ClaveES.app */,
+				5FBF611836DAB4D24BAEC379 /* ClaveESExtension.systemextension */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		E0F18321BDB54D3E4D84A460 /* ClaveESExtension */ = {
+			isa = PBXGroup;
+			children = (
+				8D375262D2EF9E5AF5E83817 /* ClaveESExtension.entitlements */,
+				7C3ADC7E4170E9AD023EE2EC /* Info.plist */,
+				1F6C90EA132D60BC6CED479E /* main.swift */,
+			);
+			path = ClaveESExtension;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		938D088DDE08A79BD727328F /* ClaveES */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 91EF7A912986900DB43C72A4 /* Build configuration list for PBXNativeTarget "ClaveES" */;
+			buildPhases = (
+				CEE53093B53944A5CA4033E7 /* Sources */,
+				35322C253C45739C9363BBF5 /* Embed System Extensions */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				82C0C1D0350B46CFEC507B15 /* PBXTargetDependency */,
+			);
+			name = ClaveES;
+			packageProductDependencies = (
+			);
+			productName = ClaveES;
+			productReference = B88F29783B2FCAAA43A7E101 /* ClaveES.app */;
+			productType = "com.apple.product-type.application";
+		};
+		B1625802507F2A5A0C6980AA /* ClaveESExtension */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 38C859595ADCDBC851CA3257 /* Build configuration list for PBXNativeTarget "ClaveESExtension" */;
+			buildPhases = (
+				453699275359CA1A8BF5062F /* Build Rust core (libclave_mac.a) */,
+				8004DF110830838580710BFC /* Sources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = ClaveESExtension;
+			packageProductDependencies = (
+			);
+			productName = ClaveESExtension;
+			productReference = 5FBF611836DAB4D24BAEC379 /* ClaveESExtension.systemextension */;
+			productType = "com.apple.product-type.system-extension";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		071055B3204654F5A2AA7213 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = YES;
+				LastUpgradeCheck = 1430;
+				TargetAttributes = {
+					938D088DDE08A79BD727328F = {
+						DevelopmentTeam = "";
+						ProvisioningStyle = Manual;
+					};
+					B1625802507F2A5A0C6980AA = {
+						DevelopmentTeam = "";
+						ProvisioningStyle = Manual;
+					};
+				};
+			};
+			buildConfigurationList = 0128385574CEA3006A7571E5 /* Build configuration list for PBXProject "ClaveES" */;
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				Base,
+				en,
+			);
+			mainGroup = 4DA5EF55F65EED0D754914C8;
+			minimizedProjectReferenceProxies = 1;
+			preferredProjectObjectVersion = 77;
+			productRefGroup = 719985330E39129E790ECDB2 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				938D088DDE08A79BD727328F /* ClaveES */,
+				B1625802507F2A5A0C6980AA /* ClaveESExtension */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXShellScriptBuildPhase section */
+		453699275359CA1A8BF5062F /* Build Rust core (libclave_mac.a) */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+			);
+			name = "Build Rust core (libclave_mac.a)";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "set -euo pipefail\ncd \"$PROJECT_DIR/../../..\"\n# Cargo lives outside Xcode's PATH under some launch contexts.\nexport PATH=\"$HOME/.cargo/bin:/opt/homebrew/bin:/usr/local/bin:$PATH\"\ncargo build -p clave-mac --release\n";
+		};
+/* End PBXShellScriptBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		8004DF110830838580710BFC /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				402005A5605B82A9B8FA8847 /* main.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		CEE53093B53944A5CA4033E7 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				6C830529B6642665FE2CEFFD /* main.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		82C0C1D0350B46CFEC507B15 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = B1625802507F2A5A0C6980AA /* ClaveESExtension */;
+			targetProxy = 7EBFA6B9CED1D36C1FA43705 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
+/* Begin XCBuildConfiguration section */
+		0513E730E468B8EFDD7330A3 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				CLAVE_RUST_LIB_DIR = "$(PROJECT_DIR)/../../../target/release";
+				CODE_SIGN_IDENTITY = "Clave Dev Code Signing";
+				CODE_SIGN_STYLE = Manual;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				DEVELOPMENT_TEAM = "";
+				ENABLE_HARDENED_RUNTIME = YES;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"$(inherited)",
+					"DEBUG=1",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 13.0;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+		3CCF78234CB8BDCD86D10180 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = ClaveESExtension/ClaveESExtension.entitlements;
+				COMBINE_HIDPI_IMAGES = YES;
+				INFOPLIST_FILE = ClaveESExtension/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				LIBRARY_SEARCH_PATHS = "$(inherited) $(CLAVE_RUST_LIB_DIR)";
+				OTHER_LDFLAGS = "$(inherited) -lclave_mac -lEndpointSecurity -lobjc -liconv -framework AppKit -framework QuartzCore -framework Foundation -framework CoreGraphics -framework CoreFoundation";
+				PRODUCT_BUNDLE_IDENTIFIER = com.clave.ClaveES.ESClient;
+				SDKROOT = macosx;
+			};
+			name = Debug;
+		};
+		6A3D07298F8255AAFBAF05C6 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = ClaveES/ClaveES.entitlements;
+				COMBINE_HIDPI_IMAGES = YES;
+				INFOPLIST_FILE = ClaveES/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/../Frameworks";
+				PRODUCT_BUNDLE_IDENTIFIER = com.clave.ClaveES;
+				SDKROOT = macosx;
+			};
+			name = Release;
+		};
+		AB3D15FB37210EDD213D8566 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				CLAVE_RUST_LIB_DIR = "$(PROJECT_DIR)/../../../target/release";
+				CODE_SIGN_IDENTITY = "Clave Dev Code Signing";
+				CODE_SIGN_STYLE = Manual;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				DEVELOPMENT_TEAM = "";
+				ENABLE_HARDENED_RUNTIME = YES;
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 13.0;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_VERSION = 5.0;
+			};
+			name = Release;
+		};
+		F2630F07DF424D32097596F5 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = ClaveESExtension/ClaveESExtension.entitlements;
+				COMBINE_HIDPI_IMAGES = YES;
+				INFOPLIST_FILE = ClaveESExtension/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				LIBRARY_SEARCH_PATHS = "$(inherited) $(CLAVE_RUST_LIB_DIR)";
+				OTHER_LDFLAGS = "$(inherited) -lclave_mac -lEndpointSecurity -lobjc -liconv -framework AppKit -framework QuartzCore -framework Foundation -framework CoreGraphics -framework CoreFoundation";
+				PRODUCT_BUNDLE_IDENTIFIER = com.clave.ClaveES.ESClient;
+				SDKROOT = macosx;
+			};
+			name = Release;
+		};
+		F8C43094EB10018FF41781A9 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = ClaveES/ClaveES.entitlements;
+				COMBINE_HIDPI_IMAGES = YES;
+				INFOPLIST_FILE = ClaveES/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/../Frameworks";
+				PRODUCT_BUNDLE_IDENTIFIER = com.clave.ClaveES;
+				SDKROOT = macosx;
+			};
+			name = Debug;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		0128385574CEA3006A7571E5 /* Build configuration list for PBXProject "ClaveES" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				0513E730E468B8EFDD7330A3 /* Debug */,
+				AB3D15FB37210EDD213D8566 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		38C859595ADCDBC851CA3257 /* Build configuration list for PBXNativeTarget "ClaveESExtension" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				3CCF78234CB8BDCD86D10180 /* Debug */,
+				F2630F07DF424D32097596F5 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		91EF7A912986900DB43C72A4 /* Build configuration list for PBXNativeTarget "ClaveES" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				F8C43094EB10018FF41781A9 /* Debug */,
+				6A3D07298F8255AAFBAF05C6 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = 071055B3204654F5A2AA7213 /* Project object */;
+}

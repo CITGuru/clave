@@ -15,3 +15,10 @@ crate-type = ["lib", "staticlib"]
 clave-platform = { path = "../clave-platform" }
 clave-core = { path = "../clave-core" }
 clave-net = { path = "../clave-net" }
+serde_json = "1"
+
+# The native Clave Edge overlay (AppKit + CGWindowList) is macOS-only; gated so the crate still
+# builds on Linux/Windows CI.
+[target.'cfg(target_os = "macos")'.dependencies]
+cocoa = "0.26"
+objc = "0.2"

@@ -8,6 +8,7 @@ import {
   HelpCircle,
   Inbox,
   LayoutGrid,
+  Loader2,
   type LucideIcon,
   Menu,
   PanelLeftClose,
@@ -22,13 +23,9 @@ import {
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import { visualFor } from "@/lib/app-visual";
+import { launchApp } from "@/lib/launch";
 
 type AppInfo = { id: string; label: string };
-type LaunchInfo = {
-  executable: string;
-  env: [string, string][];
-  namespace_prefix: string | null;
-};
 type CapStatus = { capability: string; status: string };
 type Section =
   | "launch"
@@ -44,11 +41,13 @@ type Section =
 function AppTile({
   app,
   editing,
+  busy,
   onLaunch,
   onRemove,
 }: {
   app: AppInfo;
   editing: boolean;
+  busy: boolean;
   onLaunch: (a: AppInfo) => void;
   onRemove: (id: string) => void;
 }) {
@@ -57,23 +56,33 @@ function AppTile({
     <div className="group relative">
       <button
         type="button"
-        disabled={editing}
+        disabled={editing || busy}
         onClick={() => onLaunch(app)}
         className={cn(
           "flex w-full flex-col items-center gap-2 rounded-xl p-2 text-center transition-colors",
-          editing ? "cursor-default" : "hover:bg-zinc-100",
+          editing || busy ? "cursor-default" : "hover:bg-zinc-100",
         )}
       >
         <span
           className={cn(
-            "grid h-16 w-16 place-items-center rounded-[20px] text-white shadow-sm ring-1 ring-black/5 transition-transform duration-150",
+            "relative grid h-16 w-16 place-items-center rounded-[20px] text-white shadow-sm ring-1 ring-black/5 transition-transform duration-150",
             editing
               ? "animate-pulse"
-              : "group-hover:scale-105 group-active:scale-95",
+              : busy
+                ? ""
+                : "group-hover:scale-105 group-active:scale-95",
             bg,
           )}
         >
-          <Icon className="h-8 w-8" strokeWidth={1.9} />
+          <Icon
+            className={cn("h-8 w-8 transition-opacity", busy && "opacity-30")}
+            strokeWidth={1.9}
+          />
+          {busy && (
+            <span className="absolute inset-0 grid place-items-center">
+              <Loader2 className="h-6 w-6 animate-spin" strokeWidth={2.4} />
+            </span>
+          )}
         </span>
         <span className="line-clamp-2 w-full text-[11px] font-medium leading-tight text-zinc-600">
           {app.label}
@@ -173,12 +182,14 @@ function Grid({
   items,
   editing,
   query,
+  launching,
   onLaunch,
   onRemove,
 }: {
   items: AppInfo[];
   editing: boolean;
   query: string;
+  launching: Set<string>;
   onLaunch: (a: AppInfo) => void;
   onRemove: (id: string) => void;
 }) {
@@ -189,6 +200,7 @@ function Grid({
           key={a.id}
           app={a}
           editing={editing}
+          busy={launching.has(a.id)}
           onLaunch={onLaunch}
           onRemove={onRemove}
         />
@@ -219,6 +231,7 @@ export function FullView({
   const [editing, setEditing] = useState(initialEditing);
   const [hidden, setHidden] = useState<Set<string>>(new Set());
   const [recents, setRecents] = useState<AppInfo[]>([]);
+  const [launching, setLaunching] = useState<Set<string>>(new Set());
 
   useEffect(() => {
     invoke<AppInfo[]>("list_apps").then(setApps).catch(console.error);
@@ -236,18 +249,34 @@ export function FullView({
     (c) => c.status === "development-only",
   ).length;
 
+  function flashToast(msg: string) {
+    setToast(msg);
+    window.setTimeout(() => setToast(null), 2800);
+  }
+
   async function launch(app: AppInfo) {
+    if (launching.has(app.id)) return;
+    setLaunching((s) => new Set(s).add(app.id));
     try {
-      const spec = await invoke<LaunchInfo | null>("launch_spec", {
-        appId: app.id,
-      });
-      if (spec) {
+      const res = await launchApp(app.id);
+      if (res.kind === "launched") {
         setRecents((r) => [app, ...r.filter((x) => x.id !== app.id)].slice(0, 12));
-        setToast(`Launching ${app.label} — contained`);
-        window.setTimeout(() => setToast(null), 2600);
+        flashToast(`Launched ${app.label} — contained · pid ${res.pid}`);
+      } else if (res.kind === "resolved") {
+        setRecents((r) => [app, ...r.filter((x) => x.id !== app.id)].slice(0, 12));
+        flashToast(`${app.label} resolved — start the daemon to launch contained`);
+      } else {
+        flashToast(`Couldn’t launch ${app.label}`);
       }
     } catch (e) {
       console.error(e);
+      flashToast(`Couldn’t launch ${app.label}`);
+    } finally {
+      setLaunching((s) => {
+        const n = new Set(s);
+        n.delete(app.id);
+        return n;
+      });
     }
   }
 
@@ -405,6 +434,7 @@ export function FullView({
                 items={gridApps}
                 editing={editing}
                 query={query}
+                launching={launching}
                 onLaunch={launch}
                 onRemove={removeApp}
               />
@@ -422,6 +452,7 @@ export function FullView({
                   items={recents}
                   editing={editing}
                   query={query}
+                  launching={launching}
                   onLaunch={launch}
                   onRemove={removeApp}
                 />

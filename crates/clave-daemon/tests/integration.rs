@@ -3,8 +3,8 @@
 use std::sync::{Arc, Mutex};
 
 use clave_core::{
-    Action, AppId, AppRule, AuditAction, BinaryMatch, JoinReason, LaunchProfile, PathClass,
-    PolicyBundle,
+    Action, AppId, AppRule, AuditAction, BinaryMatch, JoinReason, LaunchProfile, OverlayPolicy,
+    PathClass, PolicyBundle,
 };
 use clave_daemon::{
     Checkpoint, CheckpointStore, Daemon, DaemonEvent, FileCheckpointStore, GatewayError,
@@ -12,7 +12,7 @@ use clave_daemon::{
 };
 use clave_net::{FlowDisposition, LoopbackTunnel, Outbound};
 use clave_platform::{
-    Capability, ClipFormat, Decision, EnforcementStatus, ProcId, Route, WindowId, Zone,
+    Capability, ClipFormat, Decision, EnforcementStatus, ProcId, Rgba, Route, WindowId, Zone,
 };
 use clave_proto::{
     verify_batch, AuditSpool, ControlReason, DeviceSigningKey, GatewayCommand, GatewaySigningKey,
@@ -110,6 +110,34 @@ fn work_window_is_tracked_by_clave_edge_and_screen_protected() {
 
     daemon.on_work_window_destroyed(WindowId(5));
     assert!(!h.overlay.is_tracking(WindowId(5)));
+}
+
+#[test]
+fn clave_edge_appearance_follows_policy_live() {
+    let (daemon, _h, _audit) = make();
+    // Default policy → the calm-blue Clave Edge, 3pt.
+    let cfg = daemon.overlay_cfg();
+    assert_eq!(cfg.color, Rgba::CLAVE_EDGE);
+    assert_eq!(cfg.thickness, 3);
+
+    // A policy update re-themes the border with no restart (the overlay reads this each frame).
+    let brand = Rgba {
+        r: 0xFF,
+        g: 0x8C,
+        b: 0x00,
+        a: 0xFF,
+    };
+    let mut pol = PolicyBundle::restrictive_default();
+    pol.version = 1;
+    pol.overlay = OverlayPolicy {
+        color: brand,
+        thickness: 8,
+    };
+    daemon.update_policy(pol).unwrap();
+
+    let cfg = daemon.overlay_cfg();
+    assert_eq!(cfg.color, brand);
+    assert_eq!(cfg.thickness, 8);
 }
 
 #[test]
@@ -454,7 +482,7 @@ async fn daemon_serves_the_launcher_over_ipc() {
     let d = Arc::clone(&daemon);
     let srv = tokio::spawn(async move {
         let conn = server.accept().await.unwrap();
-        serve_launcher(conn, move |req| d.handle_launcher_request(req))
+        serve_launcher(conn, move |req| d.handle_launcher_request(req, 1))
             .await
             .unwrap();
     });
@@ -486,6 +514,35 @@ async fn daemon_serves_the_launcher_over_ipc() {
     drop(client);
     srv.await.unwrap();
     let _ = std::fs::remove_file(&path);
+}
+
+#[cfg(unix)]
+#[test]
+fn launch_spawns_the_process_and_seeds_supervision() {
+    let (daemon, _h, _audit) = make();
+    let mut pol = PolicyBundle::restrictive_default();
+    pol.version = 1;
+    pol.apps.allow.push(
+        AppRule::new(AppId("echo-work".into()), chrome_work())
+            .with_display_name("Echo (Work)")
+            .with_executable("/bin/echo"),
+    );
+    daemon.update_policy(pol).unwrap();
+
+    let launched = daemon
+        .launch(&AppId("echo-work".into()), 1)
+        .expect("spawn + supervise");
+    assert!(launched.pid > 0, "a real pid was assigned");
+    assert!(
+        daemon.zones().is_supervised(&launched.proc),
+        "the launched process joined the work zone (launcher-seeded membership)"
+    );
+
+    // An unknown app is refused and spawns nothing.
+    assert!(matches!(
+        daemon.launch(&AppId("does-not-exist".into()), 1),
+        Err(clave_daemon::LaunchError::NotLaunchable)
+    ));
 }
 
 // gateway: authenticated control commands

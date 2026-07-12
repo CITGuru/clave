@@ -10,11 +10,9 @@
 //!
 //! ## Security note
 //!
-//! [`try_decode`] parses bytes from the **semi-trusted shim** — i.e. potentially
-//! hostile input. It must never panic, never over-allocate without bound, and must reject
-//! malformed frames cleanly. The [`MAX_FRAME`] cap bounds per-frame allocation; the property
-//! tests in `tests/framing.rs` assert panic-freedom over arbitrary bytes. A `cargo fuzz`
-//! target is a planned follow-up (the proptest covers the same surface on stable).
+//! [`try_decode`] parses bytes from the semi-trusted shim (potentially hostile input): it must never
+//! panic, never over-allocate without bound, and reject malformed frames cleanly. [`MAX_FRAME`]
+//! bounds per-frame allocation; `tests/framing.rs` asserts panic-freedom over arbitrary bytes.
 #![forbid(unsafe_code)]
 
 use clave_core::{Action, AppId, LaunchSpec, LaunchableApp, Verdict};
@@ -28,7 +26,7 @@ pub mod transport;
 
 /// Bumped on any wire-incompatible change. Exchanged in the handshake so a daemon and a shim
 /// of mismatched versions refuse rather than misparse.
-pub const PROTO_VERSION: u16 = 1;
+pub const PROTO_VERSION: u16 = 3;
 
 /// Hard cap on a single frame's body. Bounds the allocation an attacker can induce via the
 /// length prefix. 1 MiB is generous for control messages; bulk data never crosses this link.
@@ -64,11 +62,9 @@ pub enum DaemonMsg {
     Wipe,
 }
 
-/// Requests the **Clave launcher UI** sends to the daemon over the daemon↔UI link.
-/// This is a *separate channel* from the shim's [`ShimMsg`]: the launcher runs as the
-/// user and only ever *asks* the daemon for the work-app catalog, a contained launch spec, or the
-/// enforcement posture — it never adjudicates policy and never claims a zone. The daemon
-/// authenticates the connecting UI by peer credentials at accept time.
+/// Requests the Clave launcher UI sends to the daemon — a separate channel from [`ShimMsg`]. The
+/// launcher only ever asks for the catalog, a launch spec, a launch, or the enforcement posture; it
+/// never adjudicates policy. The daemon authenticates it by peer credentials at accept time.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub enum LauncherRequest {
     /// First message: negotiate the protocol version (mirrors [`ShimMsg::Hello`] without a nonce —
@@ -78,6 +74,10 @@ pub enum LauncherRequest {
     ListApps,
     /// Resolve the contained spawn spec for one app (executable + redirected env).
     PrepareLaunch { app_id: AppId },
+    /// Spawn one app **contained** and seed it into the supervised zone set. Unlike
+    /// [`LauncherRequest::PrepareLaunch`] (which only resolves the spec), this actually launches the
+    /// process — the daemon is authoritative.
+    Launch { app_id: AppId },
     /// This OS adapter's enforcement posture, for the UI's honest status display.
     Enforcement,
 }
@@ -92,6 +92,9 @@ pub enum LauncherReply {
     /// The resolved spec for [`LauncherRequest::PrepareLaunch`] — `None` if the app is unknown / not
     /// launchable, or the Clave Disk is not mounted.
     LaunchSpec { spec: Option<LaunchSpec> },
+    /// The result of [`LauncherRequest::Launch`]: the spawned pid, or `None` if the launch was
+    /// refused (unknown / not launchable / disk unmounted) or the spawn failed.
+    Launched { pid: Option<u32> },
     /// `capability → status` posture pairs for [`LauncherRequest::Enforcement`].
     Enforcement { caps: Vec<(String, String)> },
 }

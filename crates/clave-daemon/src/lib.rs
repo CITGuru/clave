@@ -19,7 +19,7 @@ use clave_core::{
 };
 use clave_ipc::{DaemonMsg, LauncherReply, LauncherRequest, ShimMsg};
 use clave_net::{FlowDisposition, FlowId, Inbound, Outbound, SplitRouter, Tunnel};
-use clave_platform::{EnforcementReport, Platform, ProcId, Rgba, Route, WindowId};
+use clave_platform::{EnforcementReport, Platform, ProcId, Route, WindowId};
 use clave_proto::{
     AuditSpool, ChainHash, DeviceSigningKey, GatewayCommand, GatewayLink, GatewayVerifier,
     LinkError, ProtoError, SignedCommand, SpoolEntry,
@@ -35,6 +35,37 @@ pub use enroll::{AcceptedEnrollment, DeviceEnrollment, DeviceVolumeKey, EnrollEr
 pub enum PolicyError {
     /// Offered a bundle older than the one in force — rollback protection.
     Rollback { current: u64, offered: u64 },
+}
+
+/// Why a contained launch failed. On success the app is spawned and seeded into the supervised
+/// zone set; on failure nothing is spawned and the zone set is unchanged.
+#[derive(Debug)]
+pub enum LaunchError {
+    /// The app is unknown to the policy, not launchable (no executable), or the Clave Disk is not
+    /// mounted — the same conditions under which [`Daemon::prepare_launch`] returns `None`.
+    NotLaunchable,
+    /// Spawning the resolved executable failed (missing binary, permissions, …).
+    Spawn(std::io::Error),
+}
+
+impl std::fmt::Display for LaunchError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            LaunchError::NotLaunchable => f.write_str("app is unknown, not launchable, or the Clave Disk is not mounted"),
+            LaunchError::Spawn(e) => write!(f, "spawn failed: {e}"),
+        }
+    }
+}
+
+impl std::error::Error for LaunchError {}
+
+/// A launched, supervised work app.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LaunchedApp {
+    /// OS process id of the spawned app.
+    pub pid: u32,
+    /// The identity seeded into the supervised zone set (audit-token form on macOS).
+    pub proc: ProcId,
 }
 
 /// Why a signed gateway command was not applied. Every variant means the
@@ -57,31 +88,24 @@ pub struct Daemon {
     zones: Arc<ZoneRegistry>,
     policy: ArcSwap<PolicyBundle>,
     platform: Box<dyn Platform>,
-    /// The audit sink *is* the tamper-evident spool: events are hash-chained and
-    /// buffered here, and [`Daemon::peek_audit`]/[`Daemon::confirm_audit`] hand them to the gateway
-    /// sync loop (ack-based, so a dead link never loses them). The spool may forward to an inner
-    /// sink (recording / metrics) — see `AuditSpool::with_sink`.
+    /// The tamper-evident audit spool: hash-chained events handed to the gateway sync loop via
+    /// [`Daemon::peek_audit`]/[`Daemon::confirm_audit`] (ack-based, so a dead link never loses them).
     audit: Arc<AuditSpool>,
     /// Split-tunnel data plane: classifies flows and pumps Tunnel-flow packets.
     router: Mutex<SplitRouter>,
-    /// Encrypted Clave Disk crypto core: DEK/XTS lifecycle, the per-IO access gate, and
-    /// crypto-shred wipe. Its gate is `zones`, so one membership set governs both
-    /// routing and disk access. `Arc<Mutex<…>>` so the OS mount adapter (WinFsp/APFS) shares
-    /// this *exact* instance — one DEK, one lock state — via [`Daemon::volume_handle`]; a remote
-    /// wipe then instantly evicts the key the mount is serving from.
+    /// Encrypted Clave Disk crypto core (DEK/XTS lifecycle, per-IO access gate, crypto-shred wipe).
+    /// Its gate is `zones`; the `Arc<Mutex<…>>` is shared with the OS mount adapter via
+    /// [`Daemon::volume_handle`] so a remote wipe instantly evicts the key the mount serves from.
     volume: Arc<Mutex<ClaveVolume>>,
     /// Verifies signed gateway commands against the pinned tenant key and tracks the anti-replay
-    /// high-water mark. Wrapped in a `Mutex` because verification advances that mark.
+    /// high-water mark (a `Mutex` because verification advances that mark).
     gateway: Mutex<GatewayVerifier>,
 }
 
 impl Daemon {
-    /// `zones` is shared with the platform's supervisor/network *and* the volume's access gate,
-    /// so all consult one membership set. In production the driver/ESF feeds the registry; in
-    /// tests the mock shares it. `volume` is the encrypted-disk core (built with `zones` as its
-    /// gate) wrapped in `Arc<Mutex<…>>`; the *same* handle is given to the OS mount adapter (see
-    /// [`Daemon::volume_handle`]). `gateway` pins the tenant key that authenticates remote
-    /// commands.
+    /// `zones` is shared with the platform's supervisor/network and the volume's access gate so all
+    /// consult one membership set. `volume` is the encrypted-disk core (gated by `zones`), the same
+    /// handle given to the OS mount adapter. `gateway` pins the tenant key for remote commands.
     pub fn new(
         zones: Arc<ZoneRegistry>,
         platform: Box<dyn Platform>,
@@ -128,11 +152,9 @@ impl Daemon {
         ));
     }
 
-    /// Classify a new exec from its code-signature + parent, joining the work zone if it is a
-    /// vetted app (the signed allow-list) or inherits from a supervised parent. The OS layer
-    /// (ES `AUTH_EXEC` / the process-notify driver) feeds this; the
-    /// *decision* is the policy brain's. Returns the [`ExecVerdict`] for the caller to answer the
-    /// OS authorization event with.
+    /// Classify a new exec from its code-signature + parent, joining the work zone if it is a vetted
+    /// app or inherits from a supervised parent. Fed by the OS layer (ES `AUTH_EXEC` / process-notify
+    /// driver); returns the [`ExecVerdict`] to answer the authorization event with.
     pub fn on_exec(
         &self,
         proc: ProcId,
@@ -159,10 +181,8 @@ impl Daemon {
         verdict
     }
 
-    /// Resolve a matched app's contained launch environment — HOME/temp redirected into the
-    /// mounted Clave Disk, plus env / (Windows) hive + namespace prefix.
-    /// `None` if the app is unknown to the policy or the volume isn't mounted. The launcher applies
-    /// this; Phase-4 (injection / FS redirection) enforces it.
+    /// Resolve a matched app's contained launch environment. `None` if the app is unknown or the
+    /// volume isn't mounted.
     pub fn resolve_launch(&self, app_id: &AppId) -> Option<ResolvedLaunch> {
         let mount = self.platform.volume().mount_point()?;
         let policy = self.policy.load();
@@ -170,11 +190,8 @@ impl Daemon {
         Some(rule.launch.resolve(app_id, &mount))
     }
 
-    /// Classify a path a supervised instance of `app_id` is touching: redirect work
-    /// data into the Clave Disk, copy-on-write system data, or pass through. `None` if the app is
-    /// unknown or the volume isn't mounted. A convenience over [`clave_core::classify_path`] for
-    /// the launcher / learn-mode; the per-IO hot path runs the same function locally in the FS
-    /// hook / ES gate.
+    /// Classify a path a supervised instance of `app_id` is touching (redirect work data, COW system
+    /// data, or pass through). `None` if the app is unknown or the volume isn't mounted.
     pub fn classify_path(&self, app_id: &AppId, path: &str) -> Option<PathClass> {
         let mount = self.platform.volume().mount_point()?;
         let policy = self.policy.load();
@@ -187,9 +204,7 @@ impl Daemon {
         ))
     }
 
-    /// The work apps the user can launch from the Clave launcher — the policy's allow-listed apps
-    /// that carry an executable. The launcher UI lists these; clicking one calls
-    /// [`Daemon::prepare_launch`].
+    /// The policy's allow-listed apps that carry an executable — what the launcher UI lists.
     pub fn launchable_apps(&self) -> Vec<LaunchableApp> {
         self.policy
             .load()
@@ -204,11 +219,8 @@ impl Daemon {
             .collect()
     }
 
-    /// Resolve everything to launch `app_id` contained: the executable plus the env /
-    /// namespace pointing into the mounted Clave Disk. The OS layer then spawns it *suspended*, adds
-    /// the PID to the supervised set, injects the shim / marks the audit token, and resumes — so the
-    /// app boots into the redirected FS. `None` if the app is unknown / not launchable, or the
-    /// volume isn't mounted.
+    /// Resolve the [`LaunchSpec`] to launch `app_id` contained. `None` if the app is unknown / not
+    /// launchable, or the volume isn't mounted.
     pub fn prepare_launch(&self, app_id: &AppId) -> Option<LaunchSpec> {
         let mount = self.platform.volume().mount_point()?;
         let policy = self.policy.load();
@@ -217,6 +229,17 @@ impl Daemon {
             return None;
         }
         Some(rule.launch_spec(&mount))
+    }
+
+    /// Launch a work app contained and seed it into the supervised zone set. It resolves the
+    /// [`LaunchSpec`], spawns with `HOME`/`TMPDIR` redirected into the Clave Disk, then joins the
+    /// child into the zone. Stops short of true containment (FS redirection + shim injection are the
+    /// deferred OS layer): the app is marked work but not yet sealed.
+    pub fn launch(&self, app_id: &AppId, now: UnixTime) -> Result<LaunchedApp, LaunchError> {
+        let spec = self.prepare_launch(app_id).ok_or(LaunchError::NotLaunchable)?;
+        let launched = spawn_contained(&spec).map_err(LaunchError::Spawn)?;
+        self.on_zone_join(launched.proc, JoinReason::Launcher, now);
+        Ok(launched)
     }
 
     /// Adjudicate an intercepted operation, auditing any non-allow outcome.
@@ -232,13 +255,19 @@ impl Daemon {
     }
 
     pub fn on_work_window_created(&self, w: WindowId) {
-        self.platform.overlay().track(w, Rgba::CLAVE_EDGE);
+        self.platform.overlay().track(w, self.policy.load().overlay.color);
         // Screen protection is best-effort: a failure degrades, never blocks.
         let _ = self.platform.screen().protect_window(w);
     }
 
     pub fn on_work_window_destroyed(&self, w: WindowId) {
         self.platform.overlay().untrack(w);
+    }
+
+    /// The current Clave Edge appearance from the active policy. The native drawer reads this live
+    /// each frame, so a policy update re-themes the border with no restart.
+    pub fn overlay_cfg(&self) -> clave_core::BorderCfg {
+        self.policy.load().overlay.border_cfg()
     }
 
     /// Route a flow: compute the policy denylist result, then delegate to the platform tunnel
@@ -312,9 +341,10 @@ impl Daemon {
 
     /// Answer a request from the Clave launcher UI. The clave-ipc `serve_launcher`
     /// loop calls this per message: it surfaces the launch catalog, resolves a contained launch
-    /// spec, and reports the enforcement posture — all read-only views over the policy brain and
-    /// the OS adapter. Unlike the shim, the launcher never adjudicates policy or claims a zone.
-    pub fn handle_launcher_request(&self, req: LauncherRequest) -> LauncherReply {
+    /// spec, spawns-and-supervises a launch, and reports the enforcement posture. Only
+    /// [`LauncherRequest::Launch`] mutates state (spawns a process + seeds the zone, at `now`); the
+    /// rest are read-only views. Unlike the shim, the launcher never adjudicates policy.
+    pub fn handle_launcher_request(&self, req: LauncherRequest, now: UnixTime) -> LauncherReply {
         match req {
             LauncherRequest::Hello { .. } => LauncherReply::Welcome {
                 proto: clave_ipc::PROTO_VERSION,
@@ -324,6 +354,9 @@ impl Daemon {
             },
             LauncherRequest::PrepareLaunch { app_id } => LauncherReply::LaunchSpec {
                 spec: self.prepare_launch(&app_id),
+            },
+            LauncherRequest::Launch { app_id } => LauncherReply::Launched {
+                pid: self.launch(&app_id, now).ok().map(|l| l.pid),
             },
             LauncherRequest::Enforcement => LauncherReply::Enforcement {
                 caps: self
@@ -376,22 +409,15 @@ impl Daemon {
         self.volume.lock().unwrap().is_unlocked()
     }
 
-    /// A shared handle to the encrypted-volume core for the OS mount adapter (WinFsp / APFS).
-    ///
-    /// The mount layer's per-sector read/write callbacks run crypto through *this* `ClaveVolume`,
-    /// and `unlock`/`lock`/`wipe` issued via the daemon act on the same instance — so a remote
-    /// wipe instantly evicts the DEK the mount is using, with no second key left serving plaintext.
-    /// The adapter must use this; it must never construct its own `ClaveVolume`.
+    /// A shared handle to the encrypted-volume core for the OS mount adapter (WinFsp / APFS). The
+    /// adapter must use this and never construct its own `ClaveVolume`, so `unlock`/`lock`/`wipe`
+    /// act on the same instance the mount serves from.
     pub fn volume_handle(&self) -> Arc<Mutex<ClaveVolume>> {
         Arc::clone(&self.volume)
     }
 
-    /// Read plaintext from the Clave Disk on behalf of `caller`, enforcing the supervised-only
-    /// access gate in the crypto core: a personal caller gets
-    /// [`VolumeError::AccessDenied`] even while the volume is mounted.
-    ///
-    /// In production per-IO crypto runs in the OS mount callback (WinFsp/APFS) over this same
-    /// shared volume; this method lets the lifecycle owner — and the tests — drive gated I/O.
+    /// Read plaintext from the Clave Disk on behalf of `caller`, enforcing the supervised-only access
+    /// gate: a personal caller gets [`VolumeError::AccessDenied`] even while mounted.
     pub fn volume_read(
         &self,
         caller: &ProcId,
@@ -415,10 +441,9 @@ impl Daemon {
             .write(caller, first_sector, data)
     }
 
-    /// **Remote wipe**: crypto-shred the enclave via the volume core — destroy the
-    /// wrapped DEK and set the marker, rendering the container unrecoverable in O(1) — then
-    /// signal the OS adapter to tear down its mount. Personal data is never inside the container
-    /// and is untouched. The crypto-shred is authoritative; the platform call is best-effort.
+    /// Remote wipe: crypto-shred the enclave (destroy the wrapped DEK, set the marker → O(1)
+    /// unrecoverable), then signal the OS adapter to tear down its mount. The crypto-shred is
+    /// authoritative; the platform call is best-effort. Personal data is untouched.
     pub fn wipe(&self, now: UnixTime) -> Result<(), VolumeError> {
         self.volume.lock().unwrap().wipe()?;
         let _ = self.platform.volume().request_wipe();
@@ -430,13 +455,10 @@ impl Daemon {
         Ok(())
     }
 
-    /// Verify a signed gateway command against the pinned tenant key (rejecting replays, stale,
-    /// and wrong-tenant), then dispatch it: a policy update, a remote lock, or a remote wipe.
-    /// This is the **only** path by which the gateway changes the device's posture — an
-    /// unverifiable or replayed command changes nothing and returns [`GatewayError`].
-    ///
-    /// A `Wipe` is honored only if it targets *this* device's container, so a wipe addressed to
-    /// another enclave can never destroy this one.
+    /// Verify a signed gateway command against the pinned tenant key (rejecting replays/stale/
+    /// wrong-tenant), then dispatch it (policy update, lock, or wipe). The only path by which the
+    /// gateway changes posture; an unverifiable command changes nothing. A `Wipe` is honored only if
+    /// it targets this device's container.
     pub fn apply_gateway_command(
         &self,
         signed: &SignedCommand,
@@ -490,9 +512,7 @@ impl Daemon {
     }
 
     /// The current posture [`Checkpoint`] to persist — the gateway anti-replay mark plus the audit
-    /// chain position. The gateway sync loop saves this each cycle (see [`GatewaySync`]); on startup
-    /// the daemon is rebuilt from a loaded checkpoint via `GatewayVerifier::with_high_water` +
-    /// `AuditSpool::resume`, so neither anti-replay nor the audit chain rewinds across a restart.
+    /// chain position — so neither rewinds across a restart.
     pub fn checkpoint(&self) -> Checkpoint {
         let (audit_seq, audit_head) = self.audit_checkpoint();
         let (audit_pending, _) = self.audit.peek();
@@ -504,13 +524,78 @@ impl Daemon {
         }
     }
 
-    /// The per-capability enforcement posture: what is production-`Enforced` vs a
-    /// `DevelopmentOnly` stand-in vs `Unavailable`. The product surfaces this, and a
-    /// production CI gate asserts [`EnforcementReport::is_production_ready`] so a dev-only fallback
-    /// can't ship silently.
+    /// The per-capability enforcement posture (`Enforced` / `DevelopmentOnly` / `Unavailable`). A CI
+    /// gate asserts [`EnforcementReport::is_production_ready`] so a dev-only fallback can't ship.
     pub fn enforcement_report(&self) -> EnforcementReport {
         self.platform.enforcement_report()
     }
+}
+
+/// Spawn a resolved [`LaunchSpec`] as a detached OS process with its contained args/env, returning
+/// the pid + identity to seed. Best-effort materializes the redirected `HOME`/`TMPDIR`.
+fn spawn_contained(spec: &LaunchSpec) -> std::io::Result<LaunchedApp> {
+    use std::process::{Command, Stdio};
+
+    for (key, value) in &spec.env {
+        if (key == "HOME" || key == "TMPDIR") && !value.is_empty() {
+            let _ = std::fs::create_dir_all(value);
+        }
+    }
+
+    let program = resolve_program(&spec.executable);
+    let mut cmd = Command::new(program);
+    // Container flags (e.g. a Chromium `--user-data-dir`) force a fresh, isolated instance.
+    cmd.args(&spec.args);
+    for (key, value) in &spec.env {
+        cmd.env(key, value);
+    }
+    // A launched work app is independent of the daemon's console.
+    cmd.stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+
+    let child = cmd.spawn()?;
+    let pid = child.id();
+    Ok(LaunchedApp {
+        pid,
+        proc: proc_id_for_pid(pid),
+    })
+}
+
+/// Resolve a policy `executable` to a spawnable path. A macOS `.app` bundle resolves to its inner
+/// Mach-O in `Contents/MacOS/` (bundle-named binary, else the sole entry); anything else is
+/// returned unchanged.
+fn resolve_program(executable: &str) -> std::path::PathBuf {
+    let path = std::path::Path::new(executable);
+    let is_bundle = path.extension().and_then(|e| e.to_str()) == Some("app");
+    if is_bundle && path.is_dir() {
+        let macos_dir = path.join("Contents").join("MacOS");
+        if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
+            let named = macos_dir.join(stem);
+            if named.exists() {
+                return named;
+            }
+        }
+        if let Some(Ok(entry)) = std::fs::read_dir(&macos_dir).ok().and_then(|mut e| e.next()) {
+            return entry.path();
+        }
+    }
+    path.to_path_buf()
+}
+
+/// Build the platform [`ProcId`] for a freshly spawned child from its pid. Without ES on macOS we
+/// synthesize a dev audit token carrying the pid (at index 5); the daemon seeds and checks
+/// membership with this same form. Production uses the real ES-supplied token.
+#[cfg(target_os = "macos")]
+fn proc_id_for_pid(pid: u32) -> ProcId {
+    let mut token = [0u32; 8];
+    token[5] = pid;
+    ProcId::macos(token)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn proc_id_for_pid(pid: u32) -> ProcId {
+    ProcId::windows(pid, 0)
 }
 
 fn audit_action_for(a: &Action, verdict: &Verdict) -> Option<AuditAction> {
@@ -595,21 +680,18 @@ pub struct SyncReport {
     pub rejected: usize,
     /// Audit entries signed and shipped to the gateway (and acknowledged) this cycle.
     pub audit_shipped: usize,
-    /// Audit entries that could not be shipped (link down) and were retained to retry. Their
-    /// presence means the chain did **not** advance past unshipped audit — no gap is created.
+    /// Audit entries that couldn't be shipped (link down) and were retained to retry — the chain
+    /// does not advance past them, so no gap is created.
     pub audit_retained: usize,
 }
 
-/// The durable posture checkpoint: the gateway anti-replay high-water mark, the audit chain
-/// position `(seq, head)`, and the unshipped audit tail. Persisted (encrypted, in the Clave Disk)
-/// so a daemon restart can neither rewind anti-replay nor break the audit
-/// chain, and so audit entries not yet acknowledged by the gateway re-ship rather than
-/// vanishing.
+/// The durable posture checkpoint: the gateway anti-replay high-water mark, the audit chain position
+/// `(seq, head)`, and the unshipped audit tail. Persisted so a restart neither rewinds anti-replay
+/// nor breaks the chain, and unacknowledged audit re-ships rather than vanishing.
 ///
-/// Note the residual window: entries are captured here only as often as the checkpoint is saved
-/// (each sync cycle), so a crash between an emit and the next save can still lose the very newest
-/// entries. Fully closing that requires per-emit persistence to the encrypted volume-backed spool
-/// — the OS layer that does not exist yet.
+/// Residual window: entries are captured only per checkpoint save (each sync cycle), so a crash
+/// between an emit and the next save can still lose the newest entries — closing that needs per-emit
+/// persistence (the deferred OS layer).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Checkpoint {
     pub gateway_high_water: u64,
@@ -651,12 +733,9 @@ impl CheckpointStore for MemCheckpointStore {
     }
 }
 
-/// A portable on-disk [`CheckpointStore`]: postcard-serializes the checkpoint to a file, writing
-/// via a temp file + atomic rename so a crash mid-write can't corrupt or truncate it. This is the
-/// dev/portable durable store — it makes anti-replay and the audit chain genuinely survive a
-/// process restart without the encrypted volume. Production still replaces it with a
-/// hardware-protected / volume-encrypted store so the mark cannot be rolled
-/// back by wiping a plaintext file.
+/// A portable on-disk [`CheckpointStore`]: postcard-serializes the checkpoint via a temp file +
+/// atomic rename so a crash mid-write can't corrupt it. Production replaces it with a
+/// hardware-protected / volume-encrypted store so the mark can't be rolled back by wiping a file.
 pub struct FileCheckpointStore {
     path: std::path::PathBuf,
 }
@@ -695,11 +774,9 @@ impl CheckpointStore for FileCheckpointStore {
     }
 }
 
-/// Drives the daemon↔gateway exchange over a [`GatewayLink`]: pull signed commands and apply them
-/// (each authenticated by the daemon), then drain the audit spool, sign it with the device key,
-/// and ship it. Owned by a dedicated task; the real mTLS transport implements
-/// [`GatewayLink`]. [`GatewaySync::sync_once`] is synchronous and side-effect-explicit so it is
-/// directly testable — the async timer that calls it on an interval is a thin wrapper.
+/// Drives the daemon↔gateway exchange over a [`GatewayLink`]: pull signed commands and apply them,
+/// then sign the audit spool with the device key and ship it. [`GatewaySync::sync_once`] is
+/// synchronous and directly testable; the async interval timer is a thin wrapper.
 pub struct GatewaySync {
     link: Box<dyn GatewayLink>,
     device_key: DeviceSigningKey,
@@ -720,14 +797,9 @@ impl GatewaySync {
     }
 
     /// Run one pull → apply → ship cycle and report what happened. Each command is independently
-    /// verified by [`Daemon::apply_gateway_command`]; a rejected one changes nothing and is counted,
-    /// not propagated.
-    ///
-    /// Audit shipping is **ack-based**: the tail is snapshotted, signed, and shipped, and only
-    /// dropped from the spool once the link confirms delivery. A dead link retains the entries to
-    /// retry next cycle — it never advances the chain past unshipped audit, so the gateway never
-    /// sees a spurious gap (the old drain-then-ship dropped the batch on a dead link and wedged the
-    /// chain permanently).
+    /// verified by [`Daemon::apply_gateway_command`]. Audit shipping is ack-based: entries are
+    /// dropped only once the link confirms delivery, so a dead link retains them to retry without
+    /// leaving a gap in the chain.
     pub fn sync_once(&mut self, daemon: &Daemon, now: UnixTime) -> SyncReport {
         let mut report = SyncReport::default();
         for command in self.link.poll_commands() {

@@ -285,6 +285,20 @@ impl LauncherClient {
         }
     }
 
+    /// Spawn one app contained and seed it into the supervised zone set. Returns the spawned pid,
+    /// or `None` if the daemon refused the launch (unknown / not launchable / disk unmounted) or the
+    /// spawn failed.
+    pub async fn launch(&mut self, app_id: AppId) -> Result<Option<u32>, TransportError> {
+        self.conn
+            .write(&LauncherRequest::Launch { app_id })
+            .await?;
+        match self.conn.read::<LauncherReply>().await? {
+            Some(LauncherReply::Launched { pid }) => Ok(pid),
+            Some(_) => Err(TransportError::Handshake("expected Launched")),
+            None => Err(TransportError::Truncated),
+        }
+    }
+
     /// This OS adapter's enforcement posture as `capability → status` pairs.
     pub async fn enforcement(&mut self) -> Result<Vec<(String, String)>, TransportError> {
         self.conn.write(&LauncherRequest::Enforcement).await?;

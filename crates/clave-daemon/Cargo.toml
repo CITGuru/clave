@@ -17,7 +17,7 @@ clave-proto = { path = "../clave-proto" }
 arc-swap = "1"
 serde = { workspace = true }
 postcard = { version = "1", features = ["use-std"] }
-tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "sync"] }
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "sync", "net", "time"] }
 
 # The OS adapter is linked per target (doc 11 §2).
 [target.'cfg(target_os = "macos")'.dependencies]

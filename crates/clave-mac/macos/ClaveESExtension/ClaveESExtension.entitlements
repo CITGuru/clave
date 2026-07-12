@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- The restricted Endpoint Security entitlement (doc 14 §1.2). In production this must be
+         authorized by a provisioning profile from Apple; on a SIP-disabled dev Mac AMFI honors it
+         on a self-signed binary (doc 14 §2.3). -->
+    <key>com.apple.developer.endpoint-security.client</key>
+    <true/>
+</dict>
+</plist>

@@ -29,6 +29,15 @@ impl ProcId {
     pub fn macos(audit_token: [u32; 8]) -> Self {
         ProcId::Macos { audit_token }
     }
+
+    /// The bare OS process id — not an identity on its own (pids recycle), but what OS window/process
+    /// enumeration keys on. On macOS it lives at index 5 of the `audit_token_t`.
+    pub fn pid(&self) -> u32 {
+        match self {
+            ProcId::Windows { pid, .. } => *pid,
+            ProcId::Macos { audit_token } => audit_token[5],
+        }
+    }
 }
 
 /// The two halves of the machine. `Work` == supervised / in-enclave; `Personal` ==
