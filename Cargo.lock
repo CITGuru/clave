@@ -442,6 +442,7 @@ dependencies = [
  "security-framework-sys",
  "serde_json",
  "sha2",
+ "zeroize",
 ]
 
 [[package]]

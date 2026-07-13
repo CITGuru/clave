@@ -4,6 +4,9 @@ use std::process::{Command, Stdio};
 use std::sync::Mutex;
 
 use clave_platform::{PResult, PlatformError, VolumeMount};
+use zeroize::Zeroizing;
+
+use crate::se_seal::{Passphrase, SEALED_LEN};
 
 const KEYCHAIN_SERVICE: &str = "com.clave.volume";
 
@@ -24,8 +27,12 @@ fn configured_size_mb() -> u64 {
         .max(MIN_SIZE_MB)
 }
 
-fn passphrase_account(container: u128) -> String {
-    format!("sparsebundle-passphrase-{container:032x}")
+/// A container's passphrase lives under exactly **one** Keychain account, whatever its custody
+/// form. Two accounts (one per form) would let each launch path mint its own passphrase for the
+/// same container — and since a container is only created once, whichever path ran second would
+/// hold a passphrase that can never open the existing bundle.
+fn key_account(container: u128) -> String {
+    format!("sparsebundle-key-{container:032x}")
 }
 
 fn keychain_get(account: &str) -> Option<Vec<u8>> {
@@ -41,81 +48,137 @@ fn keychain_delete(account: &str) {
     let _ = security_framework::passwords::delete_generic_password(KEYCHAIN_SERVICE, account);
 }
 
-/// Encode raw random bytes as lowercase hex. `-stdinpass` reads its passphrase as a line of text —
-/// raw random bytes routinely contain a NUL or newline that truncates or misparses the read (hdiutil
-/// then fails with "unable to process -stdinpass argument"); hex is ASCII-safe and still carries
-/// the full 256 bits of entropy.
-fn hex_encode(bytes: &[u8]) -> String {
-    bytes.iter().map(|b| format!("{b:02x}")).collect()
+/// How a container's passphrase is held. The stored blob is `[tag] ++ payload`, so the custody
+/// form travels *with* the secret and a reader can never mistake one for the other.
+enum StoredKey {
+    /// Sealed to this device's Secure Enclave (`se_seal`). Only the signed host can open it.
+    Sealed(Box<[u8; SEALED_LEN]>),
+    /// Plain bytes in the login Keychain: OS-encrypted at rest, but not hardware-bound. What an
+    /// unsigned `cargo run` provisions, since it cannot reach the Secure Enclave.
+    Plain(Passphrase),
 }
 
-/// Fetch this container's sparsebundle passphrase, preferring the Secure-Enclave-sealed path
-/// ([`se_passphrase_for`]) and falling back to a plain Keychain-stored one only when that's
-/// unavailable — which is the normal, expected outcome for an unsigned `cargo run` binary (it
-/// carries no `keychain-access-groups` entitlement at all, so the SE call fails with an ordinary,
-/// catchable OSStatus error, not a kill: AMFI only kills a binary whose entitlements claim a
-/// capability it can't prove, not one with no relevant entitlement present). Only a binary built
-/// and signed through `crates/clave-mac/macos/ClaveDaemonHost` reaches the SE path.
-fn passphrase_for(container: u128) -> io::Result<Vec<u8>> {
-    match se_passphrase_for(container) {
-        Ok(bytes) => Ok(bytes),
-        Err(e) => {
-            eprintln!(
-                "clave-mac: Secure Enclave sealing unavailable ({e}) — falling back to a plain \
-                 Keychain-stored passphrase (DevelopmentOnly, not hardware-rooted). Run the signed \
-                 ClaveDaemonHost app for the Secure Enclave path."
-            );
-            legacy_plain_passphrase_for(container)
+const TAG_SEALED: u8 = 1;
+const TAG_PLAIN: u8 = 2;
+
+fn load_stored(container: u128) -> io::Result<Option<StoredKey>> {
+    let Some(blob) = keychain_get(&key_account(container)) else {
+        return Ok(None);
+    };
+    let (tag, payload) = blob
+        .split_first()
+        .ok_or_else(|| io::Error::other("stored passphrase blob is empty"))?;
+    match *tag {
+        TAG_SEALED => {
+            let sealed: [u8; SEALED_LEN] = payload
+                .try_into()
+                .map_err(|_| io::Error::other("stored sealed passphrase has the wrong length"))?;
+            Ok(Some(StoredKey::Sealed(Box::new(sealed))))
+        }
+        TAG_PLAIN => {
+            let plain: [u8; 64] = payload
+                .try_into()
+                .map_err(|_| io::Error::other("stored plain passphrase has the wrong length"))?;
+            Ok(Some(StoredKey::Plain(Zeroizing::new(plain))))
+        }
+        other => Err(io::Error::other(format!(
+            "stored passphrase blob has an unknown custody tag ({other})"
+        ))),
+    }
+}
+
+fn store(container: u128, key: &StoredKey) -> io::Result<()> {
+    let mut blob = Zeroizing::new(Vec::with_capacity(1 + SEALED_LEN));
+    match key {
+        StoredKey::Sealed(sealed) => {
+            blob.push(TAG_SEALED);
+            blob.extend_from_slice(sealed.as_slice());
+        }
+        StoredKey::Plain(plain) => {
+            blob.push(TAG_PLAIN);
+            blob.extend_from_slice(plain.as_slice());
+        }
+    }
+    keychain_set(&key_account(container), &blob)
+}
+
+/// Recover the passphrase from its stored form. A sealed blob **requires** the Secure Enclave —
+/// if it is unreachable we fail closed rather than mint a replacement, because a replacement could
+/// never open the existing container.
+fn unwrap_stored(key: StoredKey) -> io::Result<Passphrase> {
+    match key {
+        StoredKey::Plain(p) => Ok(p),
+        StoredKey::Sealed(sealed) => {
+            // `load`, never `load_or_generate`: a fresh SE key here would orphan this blob.
+            let se_key = crate::se_seal::SeSealingKey::load()?.ok_or_else(|| {
+                io::Error::other(
+                    "this container's passphrase is sealed to the Secure Enclave, but no SE key is \
+                     reachable from this binary. Run the signed ClaveDaemonHost app. Refusing to \
+                     mint a replacement passphrase (it could never open the existing container).",
+                )
+            })?;
+            crate::se_seal::open(&se_key, &sealed)
         }
     }
 }
 
-fn se_sealed_account(container: u128) -> String {
-    format!("sparsebundle-se-sealed-{container:032x}")
+/// Mint a fresh passphrase: 32 bytes of entropy, hex-encoded. `-stdinpass` reads its passphrase as
+/// a line of text — raw random bytes routinely contain a NUL or newline that truncates or misparses
+/// the read (hdiutil then fails with "unable to process -stdinpass argument"); hex is ASCII-safe and
+/// still carries the full 256 bits.
+fn mint_passphrase() -> io::Result<Passphrase> {
+    let mut entropy = Zeroizing::new([0u8; 32]);
+    getrandom::getrandom(&mut entropy[..])
+        .map_err(|e| io::Error::other(format!("RNG failed: {e}")))?;
+    let mut out = Zeroizing::new([0u8; 64]);
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    for (i, b) in entropy.iter().enumerate() {
+        out[2 * i] = HEX[(b >> 4) as usize];
+        out[2 * i + 1] = HEX[(b & 0x0f) as usize];
+    }
+    Ok(out)
 }
 
-/// Generate (once) a fresh 64-byte hex passphrase, seal it to this device's Secure-Enclave key,
-/// and store only the sealed blob in Keychain — the plaintext passphrase never touches disk.
-/// Later calls unseal the stored blob, which only succeeds by asking the Secure Enclave itself to
-/// perform the ECDH (`se_seal::open`); a copied Keychain database is useless without this device.
-fn se_passphrase_for(container: u128) -> io::Result<Vec<u8>> {
-    let account = se_sealed_account(container);
-    let se_key = crate::se_seal::SeSealingKey::load_or_generate()?;
-
-    if let Some(existing) = keychain_get(&account) {
-        let sealed: [u8; crate::se_seal::SEALED_LEN] = existing
-            .as_slice()
-            .try_into()
-            .map_err(|_| io::Error::other("stored SE-sealed passphrase has the wrong length"))?;
-        return crate::se_seal::open(&se_key, &sealed).map(|b| b.to_vec());
+/// The passphrase for an **existing** container. Fails closed if the Keychain has no record of it:
+/// minting a new one here would produce a passphrase that cannot open the container that already
+/// exists on disk, silently wedging it.
+fn passphrase_for_existing(container: u128) -> io::Result<Passphrase> {
+    match load_stored(container)? {
+        Some(key) => unwrap_stored(key),
+        None => Err(io::Error::other(
+            "the Clave Disk container exists on disk but its passphrase is not in the Keychain. \
+             Refusing to mint a new one (it could never open this container). Delete the container \
+             to start fresh, or restore the Keychain item.",
+        )),
     }
-
-    let se_pub = se_key.public_key_bytes()?;
-    let mut bytes = [0u8; 32];
-    getrandom::getrandom(&mut bytes).map_err(|e| io::Error::other(format!("RNG failed: {e}")))?;
-    let passphrase = hex_encode(&bytes).into_bytes();
-    let passphrase_arr: [u8; 64] = passphrase
-        .as_slice()
-        .try_into()
-        .expect("hex-encoding 32 bytes always yields 64 ASCII bytes");
-
-    let sealed = crate::se_seal::seal(&se_pub, &passphrase_arr)?;
-    keychain_set(&account, &sealed)?;
-    Ok(passphrase)
 }
 
-/// The pre-SE fallback: a passphrase stored as plain bytes in the ordinary login Keychain — real
-/// OS-encrypted-at-rest storage, but not hardware-sealed (extractable by anything with Keychain
-/// access, unlike [`se_passphrase_for`]'s blob).
-fn legacy_plain_passphrase_for(container: u128) -> io::Result<Vec<u8>> {
-    let account = passphrase_account(container);
-    if let Some(existing) = keychain_get(&account) {
-        return Ok(existing);
+/// The passphrase for a **new** container: reuse a stored one if provisioning was interrupted after
+/// the Keychain write but before the container was created, else mint and store one. Custody is
+/// decided once, here: Secure-Enclave-sealed when the SE is reachable (the signed host), plain
+/// Keychain otherwise (an unsigned `cargo run`) — and whichever form is chosen is what every later
+/// open must satisfy.
+fn passphrase_for_new(container: u128) -> io::Result<Passphrase> {
+    if let Some(key) = load_stored(container)? {
+        return unwrap_stored(key);
     }
-    let mut bytes = [0u8; 32];
-    getrandom::getrandom(&mut bytes).map_err(|e| io::Error::other(format!("RNG failed: {e}")))?;
-    let passphrase = hex_encode(&bytes).into_bytes();
-    keychain_set(&account, &passphrase)?;
+
+    let passphrase = mint_passphrase()?;
+    let stored = match crate::se_seal::SeSealingKey::load_or_generate() {
+        Ok(se_key) => {
+            let se_pub = se_key.public_key_bytes()?;
+            StoredKey::Sealed(Box::new(crate::se_seal::seal(&se_pub, &passphrase)?))
+        }
+        Err(e) => {
+            eprintln!(
+                "clave-mac: Secure Enclave unavailable ({e}) — provisioning this Clave Disk with a \
+                 plain Keychain passphrase (DevelopmentOnly, not hardware-rooted). Run the signed \
+                 ClaveDaemonHost app to provision a hardware-sealed disk."
+            );
+            StoredKey::Plain(passphrase.clone())
+        }
+    };
+    store(container, &stored)?;
     Ok(passphrase)
 }
 
@@ -143,10 +206,10 @@ fn run_hdiutil_with_passphrase(args: &[&str], target: &Path, passphrase: &[u8]) 
     Ok(())
 }
 
-fn create_if_missing(bundle_path: &Path, size_mb: u64, passphrase: &[u8]) -> io::Result<()> {
-    if bundle_path.exists() {
-        return Ok(());
-    }
+/// Create the encrypted container. The caller has already established that `bundle_path` does not
+/// exist and minted the matching passphrase — see [`MacVolumeMount::attach`], which keeps the
+/// "create a new container" and "open an existing one" paths strictly separate.
+fn create(bundle_path: &Path, size_mb: u64, passphrase: &[u8]) -> io::Result<()> {
     if let Some(parent) = bundle_path.parent() {
         std::fs::create_dir_all(parent)?;
     }
@@ -232,19 +295,34 @@ impl MacVolumeMount {
         self.container
     }
 
-    /// Idempotent: if `mount_point` is *already* a live volume — including from a previous process
-    /// (e.g. a second `cargo run` while an earlier run's mount is still up, so this instance's own
-    /// `mount_point` state starts `None`) — this just adopts it instead of re-running `hdiutil`,
-    /// which would otherwise fail with "mount point busy".
+    /// Mount the Clave Disk, creating the container on first use.
+    ///
+    /// Creating and opening are strictly separate: a container is only ever created alongside the
+    /// passphrase that was minted for it, and an *existing* container is only ever opened with the
+    /// passphrase the Keychain already holds for it ([`passphrase_for_existing`] fails closed
+    /// rather than minting). Collapsing the two — minting a passphrase and then skipping creation
+    /// because the container already existed — silently wedges the disk: the new passphrase cannot
+    /// open the old container, and the old one has been overwritten.
+    ///
+    /// Idempotent: if `mount_point` is already a live volume — including one left mounted by a
+    /// previous process, so this instance's own `mount_point` starts `None` — adopt it rather than
+    /// re-running `hdiutil`, which would fail with "mount point busy".
     pub fn attach(&self, mount_point: impl Into<PathBuf>) -> PResult<()> {
         let mount_point = mount_point.into();
         if is_attached(&mount_point) {
             *self.mount_point.lock().expect("mount lock poisoned") = Some(mount_point);
             return Ok(());
         }
-        let passphrase = passphrase_for(self.container).map_err(io_err)?;
-        create_if_missing(&self.bundle_path, configured_size_mb(), &passphrase).map_err(io_err)?;
-        attach(&self.bundle_path, &mount_point, &passphrase).map_err(io_err)?;
+
+        let passphrase = if self.bundle_path.exists() {
+            passphrase_for_existing(self.container).map_err(io_err)?
+        } else {
+            let passphrase = passphrase_for_new(self.container).map_err(io_err)?;
+            create(&self.bundle_path, configured_size_mb(), &passphrase[..]).map_err(io_err)?;
+            passphrase
+        };
+
+        attach(&self.bundle_path, &mount_point, &passphrase[..]).map_err(io_err)?;
         *self.mount_point.lock().expect("mount lock poisoned") = Some(mount_point);
         Ok(())
     }
@@ -292,11 +370,11 @@ impl VolumeMount for MacVolumeMount {
 
     fn request_wipe(&self) -> PResult<()> {
         self.detach()?;
-        // Delete both possible passphrase forms — whichever `passphrase_for` actually used (SE
-        // sealing when signed, plain Keychain when not) is now unrecoverable; deleting the other
-        // (never provisioned) is the same idempotent no-op `KeyStore::destroy` documents.
-        keychain_delete(&se_sealed_account(self.container));
-        keychain_delete(&passphrase_account(self.container));
+        // Crypto-shred: without the passphrase the container is unrecoverable, whichever custody
+        // form it was in. Deleting an absent item is the same idempotent no-op `KeyStore::destroy`
+        // documents. (The Secure Enclave key itself is per-device and shared across containers, so
+        // it is deliberately *not* destroyed here — only this container's sealed blob.)
+        keychain_delete(&key_account(self.container));
         if self.bundle_path.exists() {
             std::fs::remove_dir_all(&self.bundle_path).map_err(io_err)?;
         }
@@ -308,80 +386,163 @@ impl VolumeMount for MacVolumeMount {
 mod tests {
     use super::*;
 
-    fn unique_container() -> u128 {
-        use std::sync::atomic::{AtomicU64, Ordering};
-        static COUNTER: AtomicU64 = AtomicU64::new(0);
-        let n = COUNTER.fetch_add(1, Ordering::Relaxed);
-        (std::process::id() as u128) << 32 | n as u128
+    /// A test container: a unique id plus its own bundle/mount paths, torn down on drop —
+    /// unmounted, container removed, **and its Keychain item deleted**. Without the last, every
+    /// test run would leave a live passphrase item behind in the developer's login Keychain.
+    struct TestVolume {
+        container: u128,
+        bundle: PathBuf,
+        mount_point: PathBuf,
+        vol: MacVolumeMount,
     }
 
-    fn tmp_dir(name: &str) -> PathBuf {
-        std::env::temp_dir().join(format!(
-            "clave-volume-test-{}-{}-{name}",
-            std::process::id(),
-            unique_container()
-        ))
+    impl TestVolume {
+        fn new(name: &str) -> Self {
+            use std::sync::atomic::{AtomicU64, Ordering};
+            static COUNTER: AtomicU64 = AtomicU64::new(0);
+            let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+            let container = (std::process::id() as u128) << 32 | n as u128;
+
+            let base = std::env::temp_dir().join(format!(
+                "clave-volume-test-{}-{n}-{name}",
+                std::process::id()
+            ));
+            // Siblings under an existing directory: `hdiutil attach -mountpoint` creates the leaf
+            // directory but not its parents, so the mount point must not be nested under a path
+            // that doesn't exist yet.
+            let bundle = base.with_extension("sparsebundle");
+            let mount_point = base.with_extension("mnt");
+            let vol = MacVolumeMount::new(container, &bundle);
+            Self {
+                container,
+                bundle,
+                mount_point,
+                vol,
+            }
+        }
+
+        /// A second `MacVolumeMount` over the *same* container and bundle — models a different
+        /// process (e.g. the signed host vs. `cargo run`) opening the same disk.
+        fn reopen(&self) -> MacVolumeMount {
+            MacVolumeMount::new(self.container, &self.bundle)
+        }
+    }
+
+    impl Drop for TestVolume {
+        fn drop(&mut self) {
+            let _ = self.vol.detach();
+            let _ = detach(&self.mount_point);
+            keychain_delete(&key_account(self.container));
+            let _ = std::fs::remove_dir_all(&self.bundle);
+            let _ = std::fs::remove_dir_all(&self.mount_point);
+        }
     }
 
     #[test]
     fn not_mounted_before_attach() {
-        let vol = MacVolumeMount::new(
-            unique_container(),
-            tmp_dir("bundle1").with_extension("sparsebundle"),
-        );
-        assert!(!vol.is_mounted());
-        assert_eq!(vol.mount_point(), None);
+        let t = TestVolume::new("not-mounted");
+        assert!(!t.vol.is_mounted());
+        assert_eq!(t.vol.mount_point(), None);
     }
 
     #[test]
     fn attach_creates_mounts_and_persists_data_across_detach_reattach() {
-        let container = unique_container();
-        let bundle = tmp_dir("bundle2").with_extension("sparsebundle");
-        let mount_point = tmp_dir("mnt2");
-        let vol = MacVolumeMount::new(container, &bundle);
+        let t = TestVolume::new("roundtrip");
 
-        vol.attach(&mount_point).expect("attach");
-        assert!(vol.is_mounted());
-        assert_eq!(vol.mount_point().as_deref(), mount_point.to_str());
+        t.vol.attach(&t.mount_point).expect("attach");
+        assert!(t.vol.is_mounted());
+        assert_eq!(t.vol.mount_point().as_deref(), t.mount_point.to_str());
 
-        let marker = mount_point.join("clave-test-marker.txt");
+        let marker = t.mount_point.join("clave-test-marker.txt");
         std::fs::write(&marker, b"hello from the encrypted volume").expect("write inside mount");
 
-        vol.detach().expect("detach");
-        assert!(!vol.is_mounted());
+        t.vol.detach().expect("detach");
+        assert!(!t.vol.is_mounted());
 
-        vol.attach(&mount_point).expect("re-attach");
+        t.vol.attach(&t.mount_point).expect("re-attach");
         let got = std::fs::read(&marker).expect("read back after re-attach");
         assert_eq!(got, b"hello from the encrypted volume");
 
-        vol.detach().expect("final detach");
-        let _ = std::fs::remove_dir_all(&bundle);
+        t.vol.detach().expect("final detach");
+    }
+
+    /// Regression: a *second* mount object over an already-provisioned container must open it with
+    /// the stored passphrase, never mint a fresh one. Minting here is what silently wedged the disk
+    /// when the signed host and an unsigned `cargo run` each kept their own passphrase: whichever
+    /// ran second minted a passphrase that could not open the container that already existed.
+    #[test]
+    fn reopening_an_existing_container_reuses_its_stored_passphrase() {
+        let t = TestVolume::new("reopen");
+
+        t.vol.attach(&t.mount_point).expect("first attach creates");
+        let marker = t.mount_point.join("provisioned-by-the-first-mount.txt");
+        std::fs::write(&marker, b"work data").expect("write inside mount");
+        t.vol.detach().expect("detach");
+
+        // A fresh MacVolumeMount — as a different process would construct — over the same disk.
+        let second = t.reopen();
+        second
+            .attach(&t.mount_point)
+            .expect("a second mount must open the existing container, not re-provision it");
+        assert_eq!(
+            std::fs::read(&marker).expect("data survives"),
+            b"work data",
+            "the second mount must decrypt what the first wrote"
+        );
+        second.detach().expect("detach");
+    }
+
+    /// Fail closed: an existing container whose Keychain passphrase is gone must refuse to mount,
+    /// not mint a replacement (which could never open it, and would overwrite the real record).
+    #[test]
+    fn existing_container_without_a_stored_passphrase_refuses_to_mount() {
+        let t = TestVolume::new("orphaned");
+        t.vol.attach(&t.mount_point).expect("attach creates");
+        t.vol.detach().expect("detach");
+
+        keychain_delete(&key_account(t.container));
+
+        let err = t
+            .reopen()
+            .attach(&t.mount_point)
+            .expect_err("must refuse to mount a container whose passphrase is missing");
+        match err {
+            PlatformError::Io(msg) => assert!(
+                msg.contains("Refusing to mint"),
+                "expected a fail-closed refusal, got: {msg}"
+            ),
+            other => panic!("expected an Io refusal, got {other:?}"),
+        }
     }
 
     #[test]
     fn request_wipe_detaches_deletes_keychain_item_and_removes_bundle() {
-        let container = unique_container();
-        let bundle = tmp_dir("bundle3").with_extension("sparsebundle");
-        let mount_point = tmp_dir("mnt3");
-        let vol = MacVolumeMount::new(container, &bundle);
-        vol.attach(&mount_point).expect("attach");
+        let t = TestVolume::new("wipe");
+        t.vol.attach(&t.mount_point).expect("attach");
 
-        vol.request_wipe().expect("wipe");
+        t.vol.request_wipe().expect("wipe");
 
-        assert!(!vol.is_mounted(), "wipe must unmount");
-        assert!(!bundle.exists(), "wipe must remove the container blob");
+        assert!(!t.vol.is_mounted(), "wipe must unmount");
+        assert!(!t.bundle.exists(), "wipe must remove the container blob");
         assert!(
-            keychain_get(&passphrase_account(container)).is_none(),
+            load_stored(t.container).expect("keychain readable").is_none(),
             "wipe must crypto-shred the Keychain passphrase"
         );
     }
 
     #[test]
     fn wipe_before_any_attach_is_a_safe_noop() {
-        let vol = MacVolumeMount::new(
-            unique_container(),
-            tmp_dir("bundle4").with_extension("sparsebundle"),
+        let t = TestVolume::new("wipe-noop");
+        assert!(t.vol.request_wipe().is_ok());
+    }
+
+    #[test]
+    fn a_stored_blob_with_an_unknown_custody_tag_is_rejected() {
+        let t = TestVolume::new("bad-tag");
+        keychain_set(&key_account(t.container), &[0xFF, 1, 2, 3]).expect("seed a bogus blob");
+        assert!(
+            load_stored(t.container).is_err(),
+            "an unrecognized custody tag must fail closed, not be guessed at"
         );
-        assert!(vol.request_wipe().is_ok());
     }
 }

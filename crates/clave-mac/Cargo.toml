@@ -33,3 +33,6 @@ getrandom = "0.2"
 aes-kw = "0.2"
 aes = "0.8"
 sha2 = "0.10"
+# The sparsebundle passphrase is the volume key in all but name — zeroize it on drop, as
+# clave-volume does for the DEK/KEK (doc 04 §7).
+zeroize = { workspace = true }
