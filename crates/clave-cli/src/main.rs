@@ -75,7 +75,12 @@ fn cli_user() -> String {
         .unwrap_or_else(|| "user".to_string())
 }
 
-fn launch_text(pol: &PolicyBundle, app_id: &str, mount: &str, user: &str) -> Result<String, String> {
+fn launch_text(
+    pol: &PolicyBundle,
+    app_id: &str,
+    mount: &str,
+    user: &str,
+) -> Result<String, String> {
     let id = AppId(app_id.to_string());
     let rule = pol
         .apps

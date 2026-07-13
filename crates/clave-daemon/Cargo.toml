@@ -29,3 +29,7 @@ clave-win = { path = "../clave-win" }
 [dev-dependencies]
 clave-testkit = { path = "../clave-testkit" }
 clave-proto = { path = "../clave-proto" }
+# End-to-end tests only: drive a real device Daemon and a real control-plane Gateway through the
+# audit/command loop. The gateway never depends on the daemon in production (no cycle).
+clave-gateway = { path = "../clave-gateway" }
+clave-identity = { path = "../clave-identity" }

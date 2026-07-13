@@ -106,8 +106,8 @@ mod driver {
             std::thread::sleep(POLL);
 
             let tapping = keyboard_tappers(&zones);
-            let work_focused = frontmost_app_pid()
-                .is_some_and(|pid| zones.supervised_pids().contains(&pid));
+            let work_focused =
+                frontmost_app_pid().is_some_and(|pid| zones.supervised_pids().contains(&pid));
 
             for tapper in watch.observe(&tapping, work_focused) {
                 report(&tapper);
@@ -185,7 +185,10 @@ mod tests {
     #[test]
     fn a_tap_while_a_work_app_is_focused_is_reported() {
         let mut w = TapWatch::new();
-        assert_eq!(w.observe(&[tap(9, "keylogger")], true), vec![tap(9, "keylogger")]);
+        assert_eq!(
+            w.observe(&[tap(9, "keylogger")], true),
+            vec![tap(9, "keylogger")]
+        );
     }
 
     #[test]

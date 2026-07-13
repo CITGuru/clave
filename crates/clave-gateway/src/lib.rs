@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 
+mod audit_ingest;
 mod error;
 mod gateway;
 mod http;
@@ -14,6 +15,7 @@ mod postgres;
 #[cfg(feature = "workos")]
 mod workos;
 
+pub use audit_ingest::{AuditLedger, IngestError};
 pub use error::GatewayError;
 pub use gateway::{EnrollmentCompletion, EnrollmentOutcome, Gateway};
 pub use http::{build_router, AppState, DynGateway, SessionSealer, SESSION_COOKIE};
@@ -25,8 +27,8 @@ pub use volume::{MemVolumeKeyService, SealedVolumeKeyService, VolumeKeyService};
 
 pub use clave_core::PolicyBundle;
 pub use clave_proto::{
-    EnrollmentGrant, GatewayCommand, GatewaySigningKey, GatewayVerifier, SignedCommand, TenantId,
-    WrappedVolumeKey,
+    EnrollmentGrant, GatewayCommand, GatewaySigningKey, GatewayVerifier, SignedCommand,
+    SignedSpoolBatch, TenantId, WrappedVolumeKey,
 };
 
 #[cfg(feature = "postgres")]

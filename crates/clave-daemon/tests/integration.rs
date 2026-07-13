@@ -609,7 +609,8 @@ fn gateway_signed_policy_update_applies_and_rejects_rollback() {
     v2.version = 2;
     daemon
         .apply_gateway_command(
-            &kit.signer.sign(1, 100, GatewayCommand::UpdatePolicy(Box::new(v2))),
+            &kit.signer
+                .sign(1, 100, GatewayCommand::UpdatePolicy(Box::new(v2))),
             100,
         )
         .unwrap();
@@ -619,7 +620,8 @@ fn gateway_signed_policy_update_applies_and_rejects_rollback() {
     v1.version = 1;
     assert!(matches!(
         daemon.apply_gateway_command(
-            &kit.signer.sign(2, 101, GatewayCommand::UpdatePolicy(Box::new(v1))),
+            &kit.signer
+                .sign(2, 101, GatewayCommand::UpdatePolicy(Box::new(v1))),
             101
         ),
         Err(GatewayError::Policy(_))
@@ -1100,8 +1102,7 @@ fn resolve_launch_redirects_a_matched_app_into_the_clave_disk() {
         .resolve_launch(&AppId("chrome-work".into()))
         .expect("a known app + mounted volume resolves");
     assert!(
-        resolved.home.starts_with("/Volumes/ClaveDisk/")
-            && resolved.home != "/Volumes/ClaveDisk/"
+        resolved.home.starts_with("/Volumes/ClaveDisk/") && resolved.home != "/Volumes/ClaveDisk/"
     );
     assert_eq!(
         resolved.profile_dir,

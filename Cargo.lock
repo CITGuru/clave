@@ -361,6 +361,8 @@ version = "0.1.0"
 dependencies = [
  "arc-swap",
  "clave-core",
+ "clave-gateway",
+ "clave-identity",
  "clave-ipc",
  "clave-mac",
  "clave-net",

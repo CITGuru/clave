@@ -375,8 +375,14 @@ fn policy_may_sanction_an_input_tapper() {
     let mut pol = PolicyBundle::restrictive_default();
     pol.input.allowed_tappers = vec!["TextExpander".into()];
     let zones = ZoneRegistry::new();
-    let ok = Action::InputTap { proc: Some(pid(9)), exe: "TextExpander".into() };
+    let ok = Action::InputTap {
+        proc: Some(pid(9)),
+        exe: "TextExpander".into(),
+    };
     assert!(decide(&ok, &zones, &pol, 1).is_allow());
-    let bad = Action::InputTap { proc: Some(pid(9)), exe: "keylogger".into() };
+    let bad = Action::InputTap {
+        proc: Some(pid(9)),
+        exe: "keylogger".into(),
+    };
     assert_eq!(decide(&bad, &zones, &pol, 1).decision, Decision::Deny);
 }

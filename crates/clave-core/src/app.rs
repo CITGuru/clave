@@ -309,7 +309,9 @@ mod tests {
     #[test]
     fn launch_profile_redirects_home_into_the_clave_disk() {
         let rule = AppRule::new(AppId("chrome-work".into()), chrome());
-        let r = rule.launch.resolve(&rule.app_id, "/Volumes/ClaveDisk", "ada");
+        let r = rule
+            .launch
+            .resolve(&rule.app_id, "/Volumes/ClaveDisk", "ada");
         assert_eq!(r.home, "/Volumes/ClaveDisk/ada");
         assert_eq!(r.profile_dir, "/Volumes/ClaveDisk/ada/profiles/chrome-work");
         assert!(r
@@ -351,7 +353,9 @@ mod tests {
         let rule = AppRule::new(AppId("vscode-work".into()), chrome())
             .with_executable("/Applications/Visual Studio Code.app")
             .with_launch(LaunchProfile::chromium().with_seed_home([".zshrc", ".local"]));
-        let r = rule.launch.resolve(&rule.app_id, "/Volumes/ClaveDisk", "ada");
+        let r = rule
+            .launch
+            .resolve(&rule.app_id, "/Volumes/ClaveDisk", "ada");
         assert_eq!(
             r.seed_home,
             vec![".zshrc".to_string(), ".local".to_string()]

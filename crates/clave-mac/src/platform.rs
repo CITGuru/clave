@@ -5,8 +5,7 @@ use clave_core::ZoneRegistry;
 use clave_platform::{
     Capability, ClipFormat, ClipboardBroker, Decision, EnforcementStatus, InputGuard,
     NetworkTunnel, PResult, Platform, PlatformError, ProcId, ProcessSupervisor, Rgba, Route,
-    ScreenGuard,
-    VolumeMount, WindowId, WindowOverlay, Zone,
+    ScreenGuard, VolumeMount, WindowId, WindowOverlay, Zone,
 };
 
 use crate::sip::SipStatus;

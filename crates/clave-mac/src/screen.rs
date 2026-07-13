@@ -78,7 +78,7 @@ impl CaptureWatch {
 }
 
 #[cfg(target_os = "macos")]
-pub use driver::{running_capture_tools, run_screen_watch};
+pub use driver::{run_screen_watch, running_capture_tools};
 
 #[cfg(target_os = "macos")]
 mod driver {

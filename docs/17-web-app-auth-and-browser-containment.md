@@ -105,6 +105,48 @@ upgrades it to a boundary is Clave's own layer, all of which already exists:
 That last row is the property worth defending in a sales conversation: **the gateway can grant and
 revoke, but it can never *impersonate*.**
 
+### 2.4 Presence-gated unlock — "are you the one holding the laptop?"
+
+An authenticated persona is a live session on a device that might be borrowed, shared, or stolen. So
+opening one can require **proof the device owner is present** — the "2FA from our end" idea, done as
+a *hardware* gate rather than a prompt we draw.
+
+The mechanism reuses the Secure-Enclave sealing already built for the volume passphrase
+([doc 04 §2](04-encrypted-volume.md), `crates/clave-mac/src/se_seal.rs`). Give each persona its own
+SE-sealed key, created with a **`SecAccessControl` presence flag**:
+
+```rust
+// SKETCH — extends se_seal.rs's load_or_generate()
+let ac = SecAccessControl::create_with_flags(
+    kSecAccessControlPrivateKeyUsage | kSecAccessControlUserPresence, // Touch ID *or* device passcode
+)?;
+opts.set_token(Token::SecureEnclave)
+    .set_access_control(ac);
+```
+
+With the flag set, the ECDH unseal (`SecKeyCopyKeyExchangeResult`, the operation that opens the
+persona) will not run until the OS satisfies the gate — **the chip refuses the operation, and macOS
+raises the Touch ID / passcode sheet itself.** Clicking a work app therefore "just opens" it, but
+the unlock is enforced by the Secure Enclave, not by any check Clave could be tricked into skipping.
+`security-framework` exposes every flag we'd choose between:
+
+| Flag | Gate |
+|---|---|
+| `kSecAccessControlUserPresence` | Touch ID, falling back to device passcode — the sensible default |
+| `kSecAccessControlBiometryCurrentSet` | Touch ID only, **invalidated if fingerprints change** — strongest, for the most sensitive personas |
+| `kSecAccessControlDevicePasscode` | Passcode only |
+
+This is a **per-persona policy** ([§4](#4-policy-schema)): a tier-1 low-risk app might not gate at
+all, while the `ops-stripe` persona demands presence on every open. Cache the unlock for a short
+grace window so a burst of clicks isn't a burst of prompts.
+
+> ⚠ **Reachable only on the signed host.** Per [`AGENTS.md`](../AGENTS.md), the Secure Enclave is
+> reachable **only** from the provisioned `ClaveDaemonHost` app; the unsigned `cargo run` dev
+> profile cannot create an SE-gated key. Presence-gating is therefore a `SignedHost`-only capability
+> and must report `EnforcementStatus` honestly ([doc 14 §5.3](14-production-and-development-platform-requirements.md))
+> — never a silently-skipped gate on the dev path. The Windows equivalent is a TPM key with a PIN /
+> Windows Hello gate ([doc 04](04-encrypted-volume.md)).
+
 ---
 
 ## 3. Auth tiers
@@ -128,6 +170,31 @@ scoped roles). Where native delegation exists it beats anything Clave can do wit
 revocation is "delete the grant," the audit trail is the provider's own, and shared-credential
 access arguably violates the provider's terms. **Tier 3 is a fallback, not the headline.**
 
+### 3.1 The runtime flow the user sees
+
+The persona model collapses into two moments: a **first login** that persists, and every **return**
+that doesn't.
+
+**First open of a persona (once per identity, per device):**
+
+| Tier | What the user does |
+|---|---|
+| 1 — Federated | Opens the app; the SP bounces to the IdP; the user types **their work email** and approves the push in Okta / the IdP app. SSO does the rest. |
+| 1 — direct login | For an app configured with a plain login, the user enters the **email + password the admin provisioned**. |
+| 3 — Assisted bootstrap | The user opens the app; the **admin** authenticates behind the protected surface ([§5](#5-tier-3--assisted-bootstrap)); the user never sees the secret. |
+
+In every case the session **persists in the persona profile** inside the Clave Disk — because the
+profile is durable and device-bound, not because a password was stored.
+
+**Every subsequent open — "just click, no login":** the app is already authenticated, so the launcher
+opens straight into it. The only thing that may stand between the click and the app is the
+[§2.4](#24-presence-gated-unlock--are-you-the-one-holding-the-laptop) presence gate — Touch ID / the
+computer passcode — when the persona's policy demands it. **No re-entry of the app credential, ever.**
+
+This is why the tier matters only at bootstrap: after the first login, tiers 1 and 3 are
+indistinguishable to the user — a click that opens a signed-in app. What differs is what Clave holds
+underneath (nothing, vs. a contained session) and how access is revoked.
+
 ---
 
 ## 4. Policy schema
@@ -148,8 +215,19 @@ pub struct PersonaRule {
     pub engine: BrowserEngine,
     /// How this persona's session comes to exist.
     pub auth: AuthTier,
+    /// Presence proof required to *open* this persona — enforced by the Secure Enclave / TPM (§2.4).
+    pub unlock: UnlockGate,
     /// Hardening applied to the profile — see §6. Not optional in production.
     pub hardening: ProfileHardening,
+}
+
+pub enum UnlockGate {
+    /// Open on click; the Clave Disk being mounted is the only gate.
+    None,
+    /// Touch ID / device passcode on open, cached for `grace_secs`.
+    Presence { grace_secs: u32 },
+    /// Biometry-only, invalidated if the enrolled fingerprints change — for the most sensitive personas.
+    BiometryCurrentSet { grace_secs: u32 },
 }
 
 pub enum AuthTier {
@@ -310,7 +388,7 @@ depends on the unenforced subsystems.
 | Phase | Work | Delivers | Blocked on |
 |---|---|---|---|
 | **A** | `WebPolicy` / `PersonaRule` / `WebAppRule` in `clave-core`; resolve web apps through the existing `prepare_launch`; fill in the launcher's **Websites** section (today a placeholder in `full-view.tsx`) | **Tier 1 SSO, end to end.** No secret ever touches Clave | — |
-| **B** | Managed-preferences hardening (§6); ES `AUTH_OPEN` gate over the profile dir; per-persona crypto-shred | The profile becomes a **boundary**, not just separation | ES entitlement ([doc 14](14-production-and-development-platform-requirements.md)) |
+| **B** | Managed-preferences hardening (§6); ES `AUTH_OPEN` gate over the profile dir; per-persona crypto-shred; per-persona SE-gated unlock (§2.4) | The profile becomes a **boundary**, not just separation; presence-gated open | ES entitlement ([doc 14](14-production-and-development-platform-requirements.md)); signed host for SE ([AGENTS.md](../AGENTS.md)) |
 | **C** | Clave-signed extension + native-messaging channel (§6.1) | Bootstrap orchestration; session-state signals | Phase A |
 | **D** | Tier 2 delegated grants (Google DWD, Stripe roles) at the gateway | The **VA story**, via the *sanctioned* provider path | Gateway admin surface |
 | **E** | Tier 3 assisted bootstrap (§5) | The long-tail fallback | **Screen-capture protection + input isolation** — currently `Unavailable` |

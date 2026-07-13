@@ -8,8 +8,8 @@ use clave_proto::SignedCommand;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    DenyReason, DeviceId, GatewayError, IdentityProvider, PolicyIssuer, RequestContext, Session,
-    Store, VolumeKeyService, WrappedVolumeKey,
+    AuditLedger, DenyReason, DeviceId, GatewayError, IdentityProvider, IngestError, PolicyIssuer,
+    RequestContext, Session, SignedSpoolBatch, Store, VolumeKeyService, WrappedVolumeKey,
 };
 
 pub struct Gateway<I, S> {
@@ -17,6 +17,7 @@ pub struct Gateway<I, S> {
     store: S,
     policy_issuer: Option<Arc<dyn PolicyIssuer>>,
     volume_keys: Option<Arc<dyn VolumeKeyService>>,
+    audit: Arc<AuditLedger>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -46,7 +47,24 @@ impl<I: IdentityProvider, S: Store> Gateway<I, S> {
             store,
             policy_issuer: None,
             volume_keys: None,
+            audit: Arc::new(AuditLedger::new()),
         }
+    }
+
+    /// Verify and admit a device's signed, hash-chained audit batch (doc 10 §6). Only a device that
+    /// has completed enrollment is registered; a batch that doesn't continue its verified chain
+    /// under its enrolled key is rejected, so suppression, rewriting, and forgery are all caught.
+    pub fn ingest_device_audit(
+        &self,
+        device: DeviceId,
+        batch: &SignedSpoolBatch,
+    ) -> Result<Vec<clave_core::AuditEvent>, IngestError> {
+        self.audit.ingest(device, batch)
+    }
+
+    /// The audit ledger, for reading a device's verified event history / high-water mark.
+    pub fn audit(&self) -> &Arc<AuditLedger> {
+        &self.audit
     }
 
     pub fn with_policy_issuer(mut self, issuer: Arc<dyn PolicyIssuer>) -> Self {
@@ -164,6 +182,9 @@ impl<I: IdentityProvider, S: Store> Gateway<I, S> {
                     .store
                     .record_device(workspace, user, device_pubkey)
                     .await?;
+                // Open the device's audit chain at genesis under the key it just enrolled, so its
+                // first shipped batch has somewhere to verify against.
+                self.audit.register_device(device, *device_pubkey);
                 let policy = match &self.policy_issuer {
                     Some(issuer) => issuer.issue_initial_policy(workspace, now).await?,
                     None => None,

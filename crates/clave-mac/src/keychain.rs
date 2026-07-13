@@ -62,7 +62,7 @@ fn write_passphrase(path: &Path, pass: &str) -> io::Result<()> {
             .mode(0o600)
             .open(path)?;
         f.write_all(pass.as_bytes())?;
-        return Ok(());
+        Ok(())
     }
     #[cfg(not(unix))]
     std::fs::write(path, pass.as_bytes())
