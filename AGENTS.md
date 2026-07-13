@@ -30,21 +30,32 @@ Run the signed daemon (logs in the terminal):
 crates/clave-mac/macos/build/Build/Products/Release/ClaveDaemonHost.app/Contents/MacOS/ClaveDaemonHost
 ```
 
-### Which binary to test against
+### Two profiles, two disks
 
-- `cargo run -p clave-daemon` — unsigned, fast loop. **Cannot reach the Secure Enclave**, so it
-  provisions/opens Clave Disks with a plain-Keychain passphrase. Never validate SE-dependent
-  behavior here; the fallback path is not the real path.
-- `ClaveDaemonHost.app` — signed, the real path. Required to validate anything touching
-  `se_seal.rs` or hardware-rooted key custody.
+The daemon runs under one of two profiles (`clave-daemon/src/mac_main.rs`), which differ only in
+whether they can reach the Secure Enclave. **They own separate Clave Disks and never collide:**
 
-A Clave Disk's key custody (Secure-Enclave-sealed vs plain Keychain) is fixed when the container
-is **created**, and opening an existing container never re-provisions it. So a disk created by
-`cargo run` stays plain, and a sealed disk is deliberately unopenable by `cargo run` (it fails
-closed rather than minting a passphrase that could not decrypt it). To switch, delete the
-container and its Keychain item, then let the intended binary create it. To keep a throwaway
-plain disk for the fast loop, point it elsewhere:
-`CLAVE_DISK_BUNDLE=/tmp/dev.sparsebundle cargo run -p clave-daemon`.
+| | `Profile::Dev` | `Profile::SignedHost` |
+|---|---|---|
+| Binary | `cargo run -p clave-daemon` | `ClaveDaemonHost.app` |
+| Secure Enclave | unreachable (unsigned) | reachable |
+| Key custody | plain Keychain (`AllowPlainFallback`) | SE-sealed (`RequireHardware`) |
+| Container | `ClaveDisk-dev.sparsebundle` | `ClaveDisk.sparsebundle` |
+| Mount | `/Volumes/ClaveDisk-dev` | `/Volumes/ClaveDisk` |
+
+Each prints its profile on startup. Use `cargo run` for the fast loop; use the signed host to
+validate anything touching `se_seal.rs` or hardware-rooted key custody — the dev profile's
+fallback is not the real path.
+
+`SignedHost` **refuses to start** rather than provision a software-only disk if the SE is
+unreachable: a hardware-rooted deployment must never silently downgrade.
+
+A disk's custody is fixed when the container is **created** and is never re-provisioned on open.
+Opening a sealed container without the SE fails closed rather than minting a passphrase that could
+not decrypt it. To change custody, delete the container and its Keychain item
+(`security delete-generic-password -s com.clave.volume -a sparsebundle-key-<container-id-hex>`)
+and let the intended binary re-create it. `CLAVE_DISK_BUNDLE` / `CLAVE_DEV_MOUNT` override the
+paths.
 
 ## Commit messages
 

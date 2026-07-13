@@ -9,7 +9,7 @@ use clave_platform::{
 };
 
 use crate::sip::SipStatus;
-use crate::volume::MacVolumeMount;
+use crate::volume::{Custody, MacVolumeMount};
 
 pub struct MacNetwork {
     zones: Arc<ZoneRegistry>,
@@ -135,8 +135,13 @@ impl MacPlatform {
     /// lab `main.rs` calls this before boxing the platform into `Daemon::new`, then attaches
     /// through the handle returned by [`MacPlatform::volume_mac`] (grabbed *before* boxing — the
     /// `Arc` mirrors `overlay_tracked`'s pattern so the concrete mount stays reachable afterward).
-    pub fn configure_volume(&mut self, container: u128, bundle_path: impl Into<PathBuf>) {
-        self.volume = Arc::new(MacVolumeMount::new(container, bundle_path));
+    pub fn configure_volume(
+        &mut self,
+        container: u128,
+        bundle_path: impl Into<PathBuf>,
+        custody: Custody,
+    ) {
+        self.volume = Arc::new(MacVolumeMount::new(container, bundle_path, custody));
     }
 
     /// The concrete mount, for the mac-specific `attach`/`detach`/`container_id` calls the

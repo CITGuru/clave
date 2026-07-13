@@ -22,7 +22,7 @@ mod se_seal;
 #[cfg(target_os = "macos")]
 mod volume;
 #[cfg(target_os = "macos")]
-pub use volume::MacVolumeMount;
+pub use volume::{Custody, MacVolumeMount};
 
 static ZONES: OnceLock<ZoneRegistry> = OnceLock::new();
 

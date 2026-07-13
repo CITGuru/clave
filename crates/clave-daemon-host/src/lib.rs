@@ -13,5 +13,7 @@
 #[cfg(target_os = "macos")]
 #[no_mangle]
 pub extern "C" fn clave_daemon_run() {
-    clave_daemon::mac_main::run_macos();
+    // The signed, provisioned host: the only build that can reach the Secure Enclave, so it runs
+    // the real, hardware-sealed Clave Disk.
+    clave_daemon::mac_main::run_macos(clave_daemon::mac_main::Profile::SignedHost);
 }

@@ -82,7 +82,9 @@ impl SeSealingKey {
             .limit(Limit::Max(1));
         match opts.search() {
             Ok(mut results) => Ok(results.pop().and_then(|r| match r {
-                security_framework::item::SearchResult::Ref(Reference::Key(k)) => Some(Self { key: k }),
+                security_framework::item::SearchResult::Ref(Reference::Key(k)) => {
+                    Some(Self { key: k })
+                }
                 _ => None,
             })),
             // Only "no such item" means no key yet. Every other failure (keychain locked, missing

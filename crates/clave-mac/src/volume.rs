@@ -153,27 +153,42 @@ fn passphrase_for_existing(container: u128) -> io::Result<Passphrase> {
     }
 }
 
+/// What key custody a container may be *created* with. Custody is decided once, at creation, and
+/// every later open must satisfy it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Custody {
+    /// Secure-Enclave-sealed, or fail. The signed host uses this: a hardware-rooted deployment must
+    /// never quietly provision a software-only disk because the SE happened to be unreachable.
+    RequireHardware,
+    /// Prefer the Secure Enclave, but accept a plain-Keychain passphrase when it is out of reach.
+    /// The unsigned `cargo run` dev binary uses this — it structurally cannot reach the SE.
+    AllowPlainFallback,
+}
+
 /// The passphrase for a **new** container: reuse a stored one if provisioning was interrupted after
-/// the Keychain write but before the container was created, else mint and store one. Custody is
-/// decided once, here: Secure-Enclave-sealed when the SE is reachable (the signed host), plain
-/// Keychain otherwise (an unsigned `cargo run`) — and whichever form is chosen is what every later
-/// open must satisfy.
-fn passphrase_for_new(container: u128) -> io::Result<Passphrase> {
+/// the Keychain write but before the container was created, else mint and store one.
+fn passphrase_for_new(container: u128, custody: Custody) -> io::Result<Passphrase> {
     if let Some(key) = load_stored(container)? {
         return unwrap_stored(key);
     }
 
     let passphrase = mint_passphrase()?;
-    let stored = match crate::se_seal::SeSealingKey::load_or_generate() {
-        Ok(se_key) => {
+    let stored = match (crate::se_seal::SeSealingKey::load_or_generate(), custody) {
+        (Ok(se_key), _) => {
             let se_pub = se_key.public_key_bytes()?;
             StoredKey::Sealed(Box::new(crate::se_seal::seal(&se_pub, &passphrase)?))
         }
-        Err(e) => {
+        // Fail rather than silently downgrade a disk that is supposed to be hardware-rooted.
+        (Err(e), Custody::RequireHardware) => {
+            return Err(io::Error::other(format!(
+                "this Clave Disk must be sealed to the Secure Enclave, which is unreachable ({e}). \
+                 Refusing to provision a software-only disk in its place."
+            )))
+        }
+        (Err(e), Custody::AllowPlainFallback) => {
             eprintln!(
                 "clave-mac: Secure Enclave unavailable ({e}) — provisioning this Clave Disk with a \
-                 plain Keychain passphrase (DevelopmentOnly, not hardware-rooted). Run the signed \
-                 ClaveDaemonHost app to provision a hardware-sealed disk."
+                 plain Keychain passphrase (DevelopmentOnly, not hardware-rooted)."
             );
             StoredKey::Plain(passphrase.clone())
         }
@@ -276,14 +291,16 @@ fn is_attached(mount_point: &Path) -> bool {
 pub struct MacVolumeMount {
     container: u128,
     bundle_path: PathBuf,
+    custody: Custody,
     mount_point: Mutex<Option<PathBuf>>,
 }
 
 impl MacVolumeMount {
-    pub fn new(container: u128, bundle_path: impl Into<PathBuf>) -> Self {
+    pub fn new(container: u128, bundle_path: impl Into<PathBuf>, custody: Custody) -> Self {
         Self {
             container,
             bundle_path: bundle_path.into(),
+            custody,
             mount_point: Mutex::new(None),
         }
     }
@@ -317,7 +334,7 @@ impl MacVolumeMount {
         let passphrase = if self.bundle_path.exists() {
             passphrase_for_existing(self.container).map_err(io_err)?
         } else {
-            let passphrase = passphrase_for_new(self.container).map_err(io_err)?;
+            let passphrase = passphrase_for_new(self.container, self.custody).map_err(io_err)?;
             create(&self.bundle_path, configured_size_mb(), &passphrase[..]).map_err(io_err)?;
             passphrase
         };
@@ -344,6 +361,7 @@ impl Default for MacVolumeMount {
         Self::new(
             0,
             std::env::temp_dir().join("clave-disk-unconfigured.sparsebundle"),
+            Custody::AllowPlainFallback,
         )
     }
 }
@@ -412,7 +430,9 @@ mod tests {
             // that doesn't exist yet.
             let bundle = base.with_extension("sparsebundle");
             let mount_point = base.with_extension("mnt");
-            let vol = MacVolumeMount::new(container, &bundle);
+            // A bare `cargo test` binary cannot reach the Secure Enclave, so tests provision with
+            // the fallback custody — the same path the unsigned dev daemon takes.
+            let vol = MacVolumeMount::new(container, &bundle, Custody::AllowPlainFallback);
             Self {
                 container,
                 bundle,
@@ -424,7 +444,13 @@ mod tests {
         /// A second `MacVolumeMount` over the *same* container and bundle — models a different
         /// process (e.g. the signed host vs. `cargo run`) opening the same disk.
         fn reopen(&self) -> MacVolumeMount {
-            MacVolumeMount::new(self.container, &self.bundle)
+            MacVolumeMount::new(self.container, &self.bundle, Custody::AllowPlainFallback)
+        }
+
+        /// The same disk, but opened by a mount that *requires* hardware custody — models the
+        /// signed host.
+        fn reopen_requiring_hardware(&self) -> MacVolumeMount {
+            MacVolumeMount::new(self.container, &self.bundle, Custody::RequireHardware)
         }
     }
 
@@ -525,7 +551,9 @@ mod tests {
         assert!(!t.vol.is_mounted(), "wipe must unmount");
         assert!(!t.bundle.exists(), "wipe must remove the container blob");
         assert!(
-            load_stored(t.container).expect("keychain readable").is_none(),
+            load_stored(t.container)
+                .expect("keychain readable")
+                .is_none(),
             "wipe must crypto-shred the Keychain passphrase"
         );
     }
@@ -534,6 +562,35 @@ mod tests {
     fn wipe_before_any_attach_is_a_safe_noop() {
         let t = TestVolume::new("wipe-noop");
         assert!(t.vol.request_wipe().is_ok());
+    }
+
+    /// `RequireHardware` must never quietly provision a software-only disk. A bare `cargo test`
+    /// binary cannot reach the Secure Enclave, so this exercises the refusal directly; under the
+    /// signed host the SE *is* reachable and the same call provisions a sealed disk.
+    #[test]
+    fn require_hardware_refuses_to_provision_without_the_secure_enclave() {
+        let t = TestVolume::new("require-hw");
+        let err = t
+            .reopen_requiring_hardware()
+            .attach(&t.mount_point)
+            .expect_err("must refuse to provision a plain disk when hardware custody is required");
+        match err {
+            PlatformError::Io(msg) => assert!(
+                msg.contains("Refusing to provision a software-only disk"),
+                "expected a hardware-custody refusal, got: {msg}"
+            ),
+            other => panic!("expected an Io refusal, got {other:?}"),
+        }
+        assert!(
+            !t.bundle.exists(),
+            "no container may be created when hardware custody cannot be honored"
+        );
+        assert!(
+            load_stored(t.container)
+                .expect("keychain readable")
+                .is_none(),
+            "no passphrase may be stored when hardware custody cannot be honored"
+        );
     }
 
     #[test]

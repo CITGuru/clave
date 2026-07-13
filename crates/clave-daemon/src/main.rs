@@ -1,8 +1,9 @@
 fn main() {
     println!("clave-daemon — IPC proto v{}", clave_ipc::PROTO_VERSION);
 
+    // The unsigned dev binary: no Secure Enclave, so it runs on its own throwaway Clave Disk.
     #[cfg(target_os = "macos")]
-    clave_daemon::mac_main::run_macos();
+    clave_daemon::mac_main::run_macos(clave_daemon::mac_main::Profile::Dev);
 
     #[cfg(not(target_os = "macos"))]
     report_platform();

@@ -7,6 +7,7 @@
 use std::sync::{Arc, Mutex};
 
 use clave_core::ZoneRegistry;
+use clave_mac::Custody;
 use clave_net::LoopbackTunnel;
 use clave_platform::{Platform, VolumeMount};
 use clave_proto::{AuditSpool, GatewaySigningKey, GatewayVerifier, TenantId};
@@ -14,23 +15,79 @@ use clave_volume::{ClaveVolume, ContainerId, ContainerMeta, Dek, Kek, MemBacking
 
 use crate::Daemon;
 
+/// Which binary is running the daemon. The two differ in exactly one way that matters — whether
+/// they can reach the Secure Enclave — so they get **separate Clave Disks**. Sharing one container
+/// would mean whichever binary created it fixed its key custody, and the other would either be
+/// locked out (sealed disk, unsigned binary) or silently working against a software-only disk.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Profile {
+    /// `cargo run -p clave-daemon` — unsigned, no `keychain-access-groups` entitlement, so the
+    /// Secure Enclave is unreachable. Gets its own throwaway disk with a plain-Keychain passphrase.
+    Dev,
+    /// `ClaveDaemonHost.app` — signed and provisioned. The real path: its disk must be
+    /// Secure-Enclave-sealed, and it refuses to run rather than provision a software-only one.
+    SignedHost,
+}
+
+impl Profile {
+    /// Distinct container ids: the daemon's in-memory `ClaveVolume` and the real OS mount are keyed
+    /// by this, and a gateway wipe targets it.
+    fn container(self) -> u128 {
+        match self {
+            Profile::Dev => 0xC1A5_DE11,
+            Profile::SignedHost => 0xC1A5_ED15,
+        }
+    }
+
+    fn custody(self) -> Custody {
+        match self {
+            Profile::Dev => Custody::AllowPlainFallback,
+            Profile::SignedHost => Custody::RequireHardware,
+        }
+    }
+
+    /// Distinct bundles and mount points, so the two profiles' disks never collide.
+    fn bundle_name(self) -> &'static str {
+        match self {
+            Profile::Dev => "ClaveDisk-dev.sparsebundle",
+            Profile::SignedHost => "ClaveDisk.sparsebundle",
+        }
+    }
+
+    fn default_mount_point(self) -> &'static str {
+        match self {
+            Profile::Dev => "/Volumes/ClaveDisk-dev",
+            Profile::SignedHost => "/Volumes/ClaveDisk",
+        }
+    }
+
+    fn banner(self) -> &'static str {
+        match self {
+            Profile::Dev => {
+                "profile: dev (unsigned `cargo run`) — plain-Keychain disk, no Secure Enclave.\n\
+                   Run ClaveDaemonHost.app for the hardware-sealed disk."
+            }
+            Profile::SignedHost => {
+                "profile: signed host — Secure-Enclave-sealed disk (hardware-rooted key custody)."
+            }
+        }
+    }
+}
+
 /// Construct the real adapter, print what it actually enforces vs a development-only stand-in or
 /// unavailable, then serve the launcher UI over the authenticated Unix-socket IPC. Runs forever
 /// (or until `CLAVE_EDGE=0`, which returns after the IPC loop stops) — never expected to return
 /// under normal operation.
-pub fn run_macos() {
-    // One container id names both the daemon's in-memory `ClaveVolume` (below — its unlock/lock/
-    // wipe lifecycle and access-gate tests) and the real OS-visible mount (its actual bytes at
-    // rest): logically the same volume, today driven by two separate mechanisms pending the
-    // ES `AUTH_OPEN` gate that ties them together (doc 04 §4.2).
-    const CONTAINER: u128 = 0xC1A5_ED15;
+pub fn run_macos(profile: Profile) {
+    println!("clave-daemon: {}", profile.banner());
 
+    let container_id = profile.container();
     let zones = Arc::new(ZoneRegistry::new());
 
     let mut platform = clave_mac::MacPlatform::new(Arc::clone(&zones));
-    platform.configure_volume(CONTAINER, disk_bundle_path());
+    platform.configure_volume(container_id, disk_bundle_path(profile), profile.custody());
     let volume_mount = platform.volume_mac();
-    match volume_mount.attach(dev_mount_point()) {
+    match volume_mount.attach(mount_point(profile)) {
         Ok(()) => println!(
             "clave-daemon: Clave Disk mounted at {}",
             volume_mount.mount_point().unwrap_or_default()
@@ -51,7 +108,7 @@ pub fn run_macos() {
         );
     }
 
-    let container = ContainerId(CONTAINER);
+    let container = ContainerId(container_id);
     let keystore = Arc::new(MemKeyStore::new());
     keystore.provision(
         container,
@@ -149,27 +206,25 @@ fn socket_path() -> std::path::PathBuf {
     p
 }
 
-/// Where the real, `hdiutil`-mounted Clave Disk appears: `$CLAVE_DEV_MOUNT`, else `/Volumes/ClaveDisk`
-/// — the production path (doc 04 §4), also what the ES `AUTH_OPEN` client already checks against
-/// (`macos/ClaveESExtension/main.swift`'s `claveDiskPrefix`).
-fn dev_mount_point() -> String {
-    if let Ok(p) = std::env::var("CLAVE_DEV_MOUNT") {
-        return p;
-    }
-    "/Volumes/ClaveDisk".to_string()
+/// Where the `hdiutil`-mounted Clave Disk appears: `$CLAVE_DEV_MOUNT`, else the profile's default.
+/// The signed host's `/Volumes/ClaveDisk` is the production path (doc 04 §4) and is what the ES
+/// `AUTH_OPEN` client checks against (`macos/ClaveESExtension/main.swift`'s `claveDiskPrefix`).
+fn mount_point(profile: Profile) -> String {
+    std::env::var("CLAVE_DEV_MOUNT").unwrap_or_else(|_| profile.default_mount_point().to_string())
 }
 
 /// Where the encrypted sparsebundle container itself lives (the opaque blob "on personal disk" in
 /// doc 04's diagram — distinct from the mount point above): `$CLAVE_DISK_BUNDLE`, else a stable
-/// per-user Application Support path.
-fn disk_bundle_path() -> std::path::PathBuf {
+/// per-user Application Support path, named per profile so the two never share a container.
+fn disk_bundle_path(profile: Profile) -> std::path::PathBuf {
     if let Ok(p) = std::env::var("CLAVE_DISK_BUNDLE") {
         return std::path::PathBuf::from(p);
     }
     std::env::var("HOME")
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|_| std::env::temp_dir())
-        .join("Library/Application Support/Clave/ClaveDisk.sparsebundle")
+        .join("Library/Application Support/Clave")
+        .join(profile.bundle_name())
 }
 
 /// A stand-in for the tenant-signed policy the gateway would supply — a representative set of
