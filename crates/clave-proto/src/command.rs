@@ -13,7 +13,10 @@ pub enum ControlReason {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum GatewayCommand {
-    UpdatePolicy(PolicyBundle),
+    /// Boxed so a `Lock`/`Wipe` — the commands that matter in an incident — isn't carried around at
+    /// the size of a whole policy bundle. `Box<T>` serializes exactly as `T`, so the canonical bytes
+    /// this command is **signed over** are unchanged.
+    UpdatePolicy(Box<PolicyBundle>),
     Lock {
         reason: ControlReason,
     },

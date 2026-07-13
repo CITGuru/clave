@@ -134,7 +134,7 @@ impl PolicyIssuer for MemPolicyIssuer {
         Ok(Some(self.signer.sign(
             counter,
             now,
-            GatewayCommand::UpdatePolicy(bundle),
+            GatewayCommand::UpdatePolicy(Box::new(bundle)),
         )))
     }
 }

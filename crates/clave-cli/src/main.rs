@@ -45,7 +45,7 @@ fn run(args: &[String]) -> Result<String, String> {
             let path = rest.first().ok_or("launch needs <policy.json>")?;
             let app = rest.get(1).ok_or("launch needs <app_id>")?;
             let mount = rest.get(2).ok_or("launch needs <mount_point>")?;
-            launch_text(&load_policy(path)?, app, mount)
+            launch_text(&load_policy(path)?, app, mount, &cli_user())
         }
         other => Err(format!("unknown command: {other}")),
     }
@@ -67,7 +67,15 @@ fn launchable_list(pol: &PolicyBundle) -> String {
     out
 }
 
-fn launch_text(pol: &PolicyBundle, app_id: &str, mount: &str) -> Result<String, String> {
+fn cli_user() -> String {
+    std::env::var("USER")
+        .ok()
+        .map(|u| u.trim().to_string())
+        .filter(|u| !u.is_empty())
+        .unwrap_or_else(|| "user".to_string())
+}
+
+fn launch_text(pol: &PolicyBundle, app_id: &str, mount: &str, user: &str) -> Result<String, String> {
     let id = AppId(app_id.to_string());
     let rule = pol
         .apps
@@ -76,7 +84,7 @@ fn launch_text(pol: &PolicyBundle, app_id: &str, mount: &str) -> Result<String, 
     if !rule.is_launchable() {
         return Err(format!("{app_id} has no executable (authorization-only)"));
     }
-    let spec = rule.launch_spec(mount);
+    let spec = rule.launch_spec(mount, user);
     let mut out = format!("exec: {}\n", spec.executable);
     for (k, v) in &spec.env {
         out.push_str(&format!("  {k}={v}\n"));
@@ -236,11 +244,11 @@ mod tests {
         assert!(list.contains("excel-work"));
         assert!(list.contains("Excel (Work)"));
 
-        let spec = launch_text(&pol, "excel-work", "/Volumes/ClaveDisk").unwrap();
+        let spec = launch_text(&pol, "excel-work", "/Volumes/ClaveDisk", "ada").unwrap();
         assert!(spec.contains("exec: /Applications/Microsoft Excel.app"));
-        assert!(spec.contains("HOME=/Volumes/ClaveDisk/profiles/excel-work"));
+        assert!(spec.contains("HOME=/Volumes/ClaveDisk/ada"));
 
-        assert!(launch_text(&pol, "nope", "/m").is_err());
+        assert!(launch_text(&pol, "nope", "/m", "ada").is_err());
     }
 
     #[test]

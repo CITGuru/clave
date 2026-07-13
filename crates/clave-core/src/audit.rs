@@ -19,6 +19,7 @@ pub enum AuditAction {
     EnclaveIntrusionBlocked,
     NetworkBlocked,
     ScreenCaptureOverWork,
+    InputTapOverWork,
     ProcessJoinedZone,
     ProcessLeftZone,
     VolumeMounted,

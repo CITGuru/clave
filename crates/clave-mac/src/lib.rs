@@ -21,6 +21,18 @@ mod clipboard;
 pub use clipboard::{frontmost_app_pid, run_clipboard_guard};
 pub use clipboard::{ClipboardGuard, GuardAction};
 
+mod screen;
+#[cfg(target_os = "macos")]
+pub use edge::work_windows_on_screen;
+#[cfg(target_os = "macos")]
+pub use screen::{run_screen_watch, running_capture_tools};
+pub use screen::{CaptureWatch, Capturer};
+
+mod input;
+#[cfg(target_os = "macos")]
+pub use input::{raw_keyboard_taps, run_input_watch};
+pub use input::{TapWatch, Tapper};
+
 #[cfg(target_os = "macos")]
 mod se_seal;
 
@@ -199,7 +211,7 @@ mod tests {
         let target = [0xB0u32, 0xB1, 0xB2, 0xB3, 0xB4, 0xB5, 0xB6, 0xB7];
         let policy_json = br#"{"allow":[{"app_id":"chrome-work",
             "binary":{"Macos":{"team_id":"EQHXZ8M8AV","signing_id":"com.google.Chrome"}},
-            "launch":{"home_subdir":"","env":[],"namespace_prefix":null,"hive_seed":null,
+            "launch":{"profile_subdir":"","env":[],"namespace_prefix":null,"hive_seed":null,
             "passthrough_paths":[]},"display_name":"Chrome","executable":""}]}"#;
         assert!(unsafe { clave_mac_load_policy_json(policy_json.as_ptr(), policy_json.len()) });
 

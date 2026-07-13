@@ -25,6 +25,20 @@ pub enum Action {
         proc: ProcId,
         host: String,
     },
+    /// A process is capturing the screen. Only reported while work windows are actually visible —
+    /// a screenshot of a purely personal desktop is never instrumented (doc 01).
+    ScreenCapture {
+        /// The capturing process, if it could be identified.
+        proc: Option<ProcId>,
+        /// Its executable name, matched against the policy's sanctioned capture tools.
+        exe: String,
+    },
+    /// A process holds a keyboard event tap. Only reported while a work app has focus — what a
+    /// keylogger reads from the user's own apps is not ours to police (doc 01).
+    InputTap {
+        proc: Option<ProcId>,
+        exe: String,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -34,6 +48,8 @@ pub enum Reason {
     FileAccess,
     EnclaveIntrusion,
     Network,
+    ScreenCapture,
+    InputTap,
     PolicyExpired,
     NotSupervised,
     Default,
@@ -96,6 +112,30 @@ pub fn decide(act: &Action, zones: &ZoneRegistry, pol: &PolicyBundle, now: UnixT
                 Verdict::deny(Reason::Network)
             } else {
                 Verdict::allow(Reason::Network)
+            }
+        }
+
+        // Reported only while work content is on screen (the OS layer establishes that), so this is
+        // always a capture *of the enclave*. A work process capturing its own zone is in-bounds; a
+        // sanctioned tool is permitted by policy; anything else is the exfil case.
+        Action::ScreenCapture { proc, exe } => {
+            let in_zone = proc.is_some_and(|p| zones.is_supervised(&p));
+            if in_zone || pol.screen.is_allowed_capturer(exe) {
+                Verdict::allow(Reason::ScreenCapture)
+            } else {
+                Verdict::of(pol.screen.on_capture, Reason::ScreenCapture)
+            }
+        }
+
+        // Reported only while a work app has focus, so the tap is reading enclave keystrokes. A work
+        // process tapping inside its own zone is in-bounds; a sanctioned tool is permitted; anything
+        // else is a keylogger as far as policy is concerned.
+        Action::InputTap { proc, exe } => {
+            let in_zone = proc.is_some_and(|p| zones.is_supervised(&p));
+            if in_zone || pol.input.is_allowed_tapper(exe) {
+                Verdict::allow(Reason::InputTap)
+            } else {
+                Verdict::of(pol.input.on_tap, Reason::InputTap)
             }
         }
     }

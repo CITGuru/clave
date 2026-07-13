@@ -148,7 +148,7 @@ impl Daemon {
         let mount = self.platform.volume().mount_point()?;
         let policy = self.policy.load();
         let rule = policy.apps.rule(app_id)?;
-        Some(rule.launch.resolve(app_id, &mount))
+        Some(rule.launch.resolve(app_id, &mount, &contained_user()))
     }
 
     pub fn classify_path(&self, app_id: &AppId, path: &str) -> Option<PathClass> {
@@ -184,7 +184,7 @@ impl Daemon {
         if !rule.is_launchable() {
             return None;
         }
-        Some(rule.launch_spec(&mount))
+        Some(rule.launch_spec(&mount, &contained_user()))
     }
 
     pub fn launch(&self, app_id: &AppId, now: UnixTime) -> Result<LaunchedApp, LaunchError> {
@@ -382,7 +382,7 @@ impl Daemon {
             .map_err(GatewayError::Rejected)?;
         match command {
             GatewayCommand::UpdatePolicy(bundle) => {
-                self.update_policy(bundle).map_err(GatewayError::Policy)?;
+                self.update_policy(*bundle).map_err(GatewayError::Policy)?;
             }
             GatewayCommand::Lock { .. } => self.lock_volume(now),
             GatewayCommand::Wipe { container, .. } => {
@@ -436,6 +436,13 @@ fn spawn_contained(spec: &LaunchSpec) -> std::io::Result<LaunchedApp> {
             let _ = std::fs::create_dir_all(value);
         }
     }
+    for arg in &spec.args {
+        if let Some(dir) = arg.strip_prefix("--user-data-dir=") {
+            if !dir.is_empty() {
+                let _ = std::fs::create_dir_all(dir);
+            }
+        }
+    }
 
     seed_contained_home(spec);
 
@@ -457,14 +464,9 @@ fn spawn_contained(spec: &LaunchSpec) -> std::io::Result<LaunchedApp> {
     })
 }
 
-/// Expose a curated set of the user's real-home entries (shell config, toolchains) inside the
-/// contained HOME so a launched dev tool has a working environment instead of a bare home. Each
-/// requested path (relative to the real user home, per [`LaunchSpec::seed_home`]) is symlinked in
-/// if it exists and isn't already present. Best-effort: a failed link never blocks the launch.
-///
-/// Note: a symlink crosses the enclave boundary — the work process gains access to the linked
-/// real-home path. This is an intentional lab-only convenience for developer tools; a production
-/// build over real FS redirection would seed copies (or nothing) instead.
+/// Symlinks the `seed_home` entries from the real user home into the contained HOME (best-effort).
+/// Security note: each symlink crosses the enclave boundary, granting the work process access to the
+/// linked real-home path — a lab-only convenience; production would seed copies (or nothing).
 fn seed_contained_home(spec: &LaunchSpec) {
     if spec.seed_home.is_empty() {
         return;
@@ -504,6 +506,22 @@ fn seed_contained_home(spec: &LaunchSpec) {
         #[cfg(unix)]
         let _ = std::os::unix::fs::symlink(&src, &dst);
     }
+}
+
+fn contained_user() -> String {
+    std::env::var("USER")
+        .ok()
+        .map(|u| u.trim().to_string())
+        .filter(|u| !u.is_empty())
+        .or_else(|| {
+            std::env::var("HOME").ok().and_then(|h| {
+                std::path::Path::new(&h)
+                    .file_name()
+                    .map(|s| s.to_string_lossy().into_owned())
+                    .filter(|s| !s.is_empty())
+            })
+        })
+        .unwrap_or_else(|| "user".to_string())
 }
 
 fn resolve_program(executable: &str) -> std::path::PathBuf {
@@ -547,6 +565,8 @@ fn audit_action_for(a: &Action, verdict: &Verdict) -> Option<AuditAction> {
             _ => AuditAction::FileSaveDenied,
         }),
         Action::NetConnect { .. } => Some(AuditAction::NetworkBlocked),
+        Action::ScreenCapture { .. } => Some(AuditAction::ScreenCaptureOverWork),
+        Action::InputTap { .. } => Some(AuditAction::InputTapOverWork),
     }
 }
 

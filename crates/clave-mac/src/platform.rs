@@ -4,7 +4,8 @@ use std::sync::{Arc, Mutex};
 use clave_core::ZoneRegistry;
 use clave_platform::{
     Capability, ClipFormat, ClipboardBroker, Decision, EnforcementStatus, InputGuard,
-    NetworkTunnel, PResult, Platform, ProcId, ProcessSupervisor, Rgba, Route, ScreenGuard,
+    NetworkTunnel, PResult, Platform, PlatformError, ProcId, ProcessSupervisor, Rgba, Route,
+    ScreenGuard,
     VolumeMount, WindowId, WindowOverlay, Zone,
 };
 
@@ -38,8 +39,13 @@ impl ClipboardBroker for MacClipboard {
 pub struct MacScreen;
 
 impl ScreenGuard for MacScreen {
+    /// macOS cannot exclude a window it does not own from capture: `sharingType` is an instance
+    /// property on your own `NSWindow`, and injecting into the work app to set it is ruled out by
+    /// SIP/library validation (doc 07 §3.2). Reporting `Ok` here would tell the daemon a work
+    /// window was protected when it is fully capturable. What macOS *can* do — notice a capture
+    /// over work content and audit it — is `screen.rs`.
     fn protect_window(&self, _w: WindowId) -> PResult<()> {
-        Ok(())
+        Err(PlatformError::Unsupported)
     }
 }
 
@@ -75,6 +81,9 @@ impl WindowOverlay for MacOverlay {
 pub struct MacInput;
 
 impl InputGuard for MacInput {
+    /// macOS ships no kernel input filter, so no work app can be given a keystroke channel a
+    /// permitted tapper cannot see (doc 06 §3.1). The adapter monitors and audits taps (`input.rs`)
+    /// but never *protects* input — so this is honestly `false`.
     fn protect_input_enabled(&self) -> bool {
         false
     }
@@ -175,9 +184,19 @@ fn default_enforcement() -> [(Capability, EnforcementStatus); Capability::COUNT]
         // work→personal transfer, but a paste inside the poll window still wins (doc 05 §3.3).
         (Clipboard, DevelopmentOnly),
         (Network, DevelopmentOnly),
-        (Screen, Unavailable),
-        (Overlay, Unavailable),
-        (Input, Unavailable),
+        // Detect + audit only (screen.rs). macOS cannot exclude a third-party window from capture
+        // at all (doc 07 §3.2), so this never reaches `Enforced`: it records screenshots taken over
+        // work content, it does not stop them. The one hard block — ES `AUTH_EXEC`-denying
+        // `screencapture` — needs the Endpoint Security entitlement.
+        (Screen, DevelopmentOnly),
+        // The Clave Edge border is drawn and running (edge.rs): a CGWindowList poll, needing no TCC
+        // grant. It is a UI affordance, not a control (doc 09 §3.3), so it is never `Enforced` — but
+        // reporting `Unavailable` for something that visibly runs would be the same lie in reverse.
+        (Overlay, DevelopmentOnly),
+        // Event taps are enumerated and audited (input.rs). macOS ships no kernel input filter, so
+        // prevention is impossible; TCC's Input Monitoring prompt is the platform's real backstop
+        // (doc 06 §3.3).
+        (Input, DevelopmentOnly),
     ]
 }
 
@@ -263,7 +282,33 @@ mod tests {
             r.status(Capability::Clipboard),
             EnforcementStatus::DevelopmentOnly
         );
-        assert_eq!(r.status(Capability::Screen), EnforcementStatus::Unavailable);
+        // Screen capture is detected and audited, never blocked — macOS cannot exclude a window it
+        // does not own from capture, so this must never claim `Enforced` (doc 07 §3.4).
+        assert_eq!(
+            r.status(Capability::Screen),
+            EnforcementStatus::DevelopmentOnly
+        );
+        // Overlay and input are detect/draw/audit only — real, running, but never `Enforced`
+        // (the overlay is a UI affordance, input has no shippable kernel filter).
+        assert_eq!(
+            r.status(Capability::Overlay),
+            EnforcementStatus::DevelopmentOnly
+        );
+        assert_eq!(
+            r.status(Capability::Input),
+            EnforcementStatus::DevelopmentOnly
+        );
+    }
+
+    /// macOS cannot protect a third-party window from capture. Reporting `Ok` would tell the daemon
+    /// the window was protected when it is fully capturable (doc 07 §3.2).
+    #[test]
+    fn protecting_a_window_from_capture_is_reported_as_unsupported() {
+        let p = platform();
+        assert_eq!(
+            p.screen().protect_window(WindowId(1)),
+            Err(clave_platform::PlatformError::Unsupported)
+        );
     }
 
     #[test]

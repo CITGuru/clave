@@ -340,7 +340,7 @@ async fn enrollment_issues_a_verifiable_signed_initial_policy() {
 
     let mut verifier = GatewayVerifier::new(TenantId(1), pinned).unwrap();
     match verifier.verify(&signed, now).unwrap() {
-        GatewayCommand::UpdatePolicy(got) => assert_eq!(got, bundle),
+        GatewayCommand::UpdatePolicy(got) => assert_eq!(*got, bundle),
         other => panic!("expected UpdatePolicy, got {other:?}"),
     }
 

@@ -64,7 +64,7 @@ impl LearnSession {
 
         let namespace_prefix = uses_named_objects.then(|| format!("Clave-{}\\", self.app_id.0));
         let launch = LaunchProfile {
-            home_subdir: self.app_id.0.clone(),
+            profile_subdir: self.app_id.0.clone(),
             container: Default::default(),
             args: Vec::new(),
             env: Vec::new(),
@@ -120,7 +120,7 @@ mod tests {
                 "/Users/alice/Library/Acme".to_string()
             ]
         );
-        assert_eq!(learned.launch.home_subdir, "acme");
+        assert_eq!(learned.launch.profile_subdir, "acme");
         assert_eq!(learned.launch.namespace_prefix, None);
     }
 

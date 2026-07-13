@@ -256,7 +256,6 @@ mod driver {
 mod tests {
     use super::*;
 
-    /// The restrictive default: nothing leaves the enclave.
     fn deny_work_to_personal(src: Zone, dst: Zone, _fmt: ClipFormat) -> Decision {
         match (src, dst) {
             (Zone::Work, Zone::Personal) => Decision::Deny,
@@ -346,8 +345,6 @@ mod tests {
         );
     }
 
-    /// A payload declares several formats at once; policy is per-format. If *any* format is denied
-    /// the payload cannot cross, since the pasteboard is cleared as a whole.
     #[test]
     fn one_denied_format_clears_a_multi_format_payload() {
         let mut g = ClipboardGuard::new();

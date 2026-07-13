@@ -41,6 +41,7 @@ Read in order if you are new to the problem. Jump by subsystem if you are implem
 | 14 | [Production & Development Platform Requirements](14-production-and-development-platform-requirements.md) | Production approvals, entitlements, driver signing, and development-mode workarounds for Apple and Windows |
 | 15 | [Identity & Enrollment Auth](15-identity-and-enrollment-auth.md) | Console login, device-enrollment handshake, device registration, sealed-cookie sessions |
 | 16 | [Third-Party Network Providers](16-third-party-network-providers.md) | Pluggable work-zone egress (Zscaler, Cisco, …): vendors-as-data, `ForwardMode` dispatch, IPsec/explicit-proxy/DNS seams |
+| 17 | [Web-App Auth & Browser Containment](17-web-app-auth-and-browser-containment.md) | Work websites: persona profiles (contained `--user-data-dir`), the federated/delegated/assisted auth tiers, Chrome managed-prefs hardening |
 | A | [Appendix A — Windows Primitives](appendix-a-windows-primitives.md) | API/crate reference tables |
 | B | [Appendix B — macOS Primitives](appendix-b-macos-primitives.md) | API/crate reference tables |
 | C | [Appendix C — References & Reading List](appendix-c-references.md) | Open-source blueprints, OS docs |

@@ -609,7 +609,7 @@ fn gateway_signed_policy_update_applies_and_rejects_rollback() {
     v2.version = 2;
     daemon
         .apply_gateway_command(
-            &kit.signer.sign(1, 100, GatewayCommand::UpdatePolicy(v2)),
+            &kit.signer.sign(1, 100, GatewayCommand::UpdatePolicy(Box::new(v2))),
             100,
         )
         .unwrap();
@@ -619,7 +619,7 @@ fn gateway_signed_policy_update_applies_and_rejects_rollback() {
     v1.version = 1;
     assert!(matches!(
         daemon.apply_gateway_command(
-            &kit.signer.sign(2, 101, GatewayCommand::UpdatePolicy(v1)),
+            &kit.signer.sign(2, 101, GatewayCommand::UpdatePolicy(Box::new(v1))),
             101
         ),
         Err(GatewayError::Policy(_))
@@ -1090,7 +1090,7 @@ fn resolve_launch_redirects_a_matched_app_into_the_clave_disk() {
     pol.version = 1;
     pol.apps.allow.push(
         AppRule::new(AppId("chrome-work".into()), chrome_work()).with_launch(LaunchProfile {
-            home_subdir: "chrome-work".into(),
+            profile_subdir: "chrome-work".into(),
             ..Default::default()
         }),
     );
@@ -1099,7 +1099,14 @@ fn resolve_launch_redirects_a_matched_app_into_the_clave_disk() {
     let resolved = daemon
         .resolve_launch(&AppId("chrome-work".into()))
         .expect("a known app + mounted volume resolves");
-    assert_eq!(resolved.home, "/Volumes/ClaveDisk/profiles/chrome-work");
+    assert!(
+        resolved.home.starts_with("/Volumes/ClaveDisk/")
+            && resolved.home != "/Volumes/ClaveDisk/"
+    );
+    assert_eq!(
+        resolved.profile_dir,
+        format!("{}/profiles/chrome-work", resolved.home)
+    );
     assert!(resolved
         .env
         .iter()
@@ -1188,10 +1195,9 @@ fn prepare_launch_resolves_the_contained_spawn_spec() {
         .prepare_launch(&AppId("excel-work".into()))
         .expect("a launchable app + a mounted volume");
     assert_eq!(spec.executable, "/Applications/Microsoft Excel.app");
-    assert!(spec
-        .env
-        .iter()
-        .any(|(k, v)| k == "HOME" && v == "/Volumes/ClaveDisk/profiles/excel-work"));
+    assert!(spec.env.iter().any(|(k, v)| k == "HOME"
+        && v.starts_with("/Volumes/ClaveDisk/")
+        && v.as_str() != "/Volumes/ClaveDisk/"));
 
     assert!(daemon.prepare_launch(&AppId("nope".into())).is_none());
 }

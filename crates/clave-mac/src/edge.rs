@@ -219,6 +219,46 @@ pub fn run_clave_edge(
     }
 }
 
+/// How many on-screen windows belong to work apps.
+///
+/// A screen capture only concerns the enclave when work content is actually on the screen — a
+/// screenshot of a purely personal desktop is never instrumented (doc 01). "Running" is not enough:
+/// a minimised or hidden work app has nothing to capture, so this counts real, non-degenerate
+/// windows at layer 0, exactly as the overlay does when deciding what to frame.
+pub fn work_windows_on_screen(zones: &ZoneRegistry) -> usize {
+    let supervised: HashSet<u32> = zones.supervised_pids().into_iter().collect();
+    if supervised.is_empty() {
+        return 0;
+    }
+    // SAFETY: CGWindowList returns a +1 CFArray of CFDictionaries; every read below goes through
+    // the same null- and type-checked helpers the overlay uses, and the array is released after.
+    unsafe {
+        let info = CGWindowListCopyWindowInfo(WINDOW_LIST_OPTION, NULL_WINDOW_ID);
+        if info.is_null() {
+            return 0;
+        }
+        let mut count = 0usize;
+        for i in 0..CFArrayGetCount(info) {
+            let dict = CFArrayGetValueAtIndex(info, i);
+            if dict.is_null() || dict_i64(dict, kCGWindowLayer).unwrap_or(1) != 0 {
+                continue;
+            }
+            let owner = dict_i64(dict, kCGWindowOwnerPID).unwrap_or(0) as u32;
+            if !supervised.contains(&owner) {
+                continue;
+            }
+            let Some(bounds) = dict_rect(dict, kCGWindowBounds) else {
+                continue;
+            };
+            if bounds.size.width >= 1.0 && bounds.size.height >= 1.0 {
+                count += 1;
+            }
+        }
+        CFRelease(info);
+        count
+    }
+}
+
 unsafe fn compute_segments(
     zones: &ZoneRegistry,
     tracked: &TrackedWindows,

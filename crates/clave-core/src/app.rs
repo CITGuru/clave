@@ -56,8 +56,8 @@ impl AppRule {
         !self.executable.is_empty()
     }
 
-    pub fn launch_spec(&self, mount_point: &str) -> LaunchSpec {
-        let resolved = self.launch.resolve(&self.app_id, mount_point);
+    pub fn launch_spec(&self, mount_point: &str, user: &str) -> LaunchSpec {
+        let resolved = self.launch.resolve(&self.app_id, mount_point, user);
         LaunchSpec {
             app_id: self.app_id.clone(),
             executable: self.executable.clone(),
@@ -98,7 +98,8 @@ pub struct LaunchSpec {
 
 #[derive(Clone, Debug, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct LaunchProfile {
-    pub home_subdir: String,
+    #[serde(alias = "home_subdir")]
+    pub profile_subdir: String,
     #[serde(default)]
     pub container: ContainerKind,
     #[serde(default)]
@@ -107,9 +108,8 @@ pub struct LaunchProfile {
     pub namespace_prefix: Option<String>,
     pub hive_seed: Option<String>,
     pub passthrough_paths: Vec<String>,
-    /// Paths under the real user home (e.g. `.zshrc`, `.local`, `.cargo`) to expose inside the
-    /// contained HOME so a launched dev tool sees the user's shell config / toolchains instead of
-    /// an empty home. The daemon symlinks each existing entry at launch. Empty ⇒ a pristine home.
+    /// Paths under the real user home (e.g. `.zshrc`, `.cargo`) the daemon symlinks into the
+    /// contained HOME at launch. Empty ⇒ a pristine home.
     #[serde(default)]
     pub seed_home: Vec<String>,
 }
@@ -117,6 +117,7 @@ pub struct LaunchProfile {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ResolvedLaunch {
     pub home: String,
+    pub profile_dir: String,
     pub args: Vec<String>,
     pub env: Vec<(String, String)>,
     pub hive_path: Option<String>,
@@ -125,22 +126,25 @@ pub struct ResolvedLaunch {
 }
 
 impl LaunchProfile {
-    pub fn resolve(&self, app_id: &AppId, mount_point: &str) -> ResolvedLaunch {
-        let sub = if self.home_subdir.is_empty() {
+    /// HOME is `<mount>/<user>`; each app's profile (`--user-data-dir`) is `<home>/profiles/<sub>`,
+    /// where `<sub>` is `profile_subdir` or the `app_id`.
+    pub fn resolve(&self, app_id: &AppId, mount_point: &str, user: &str) -> ResolvedLaunch {
+        let sub = if self.profile_subdir.is_empty() {
             app_id.0.as_str()
         } else {
-            self.home_subdir.as_str()
+            self.profile_subdir.as_str()
         };
-        let home = format!("{mount_point}/profiles/{sub}");
+        let home = format!("{mount_point}/{user}");
+        let profile_dir = format!("{home}/profiles/{sub}");
         let mut env = vec![
             ("HOME".to_string(), home.clone()),
-            ("TMPDIR".to_string(), format!("{mount_point}/tmp")),
+            ("TMPDIR".to_string(), format!("{home}/tmp")),
         ];
         env.extend(self.env.iter().cloned());
         let mut args = match self.container {
             ContainerKind::Native => Vec::new(),
             ContainerKind::Chromium => vec![
-                format!("--user-data-dir={home}"),
+                format!("--user-data-dir={profile_dir}"),
                 "--no-first-run".to_string(),
                 "--no-default-browser-check".to_string(),
             ],
@@ -149,9 +153,10 @@ impl LaunchProfile {
         let hive_path = self
             .hive_seed
             .as_ref()
-            .map(|h| format!("{mount_point}/registry/{h}"));
+            .map(|h| format!("{home}/registry/{h}"));
         ResolvedLaunch {
             home,
+            profile_dir,
             args,
             env,
             hive_path,
@@ -304,22 +309,23 @@ mod tests {
     #[test]
     fn launch_profile_redirects_home_into_the_clave_disk() {
         let rule = AppRule::new(AppId("chrome-work".into()), chrome());
-        let r = rule.launch.resolve(&rule.app_id, "/Volumes/ClaveDisk");
-        assert_eq!(r.home, "/Volumes/ClaveDisk/profiles/chrome-work");
+        let r = rule.launch.resolve(&rule.app_id, "/Volumes/ClaveDisk", "ada");
+        assert_eq!(r.home, "/Volumes/ClaveDisk/ada");
+        assert_eq!(r.profile_dir, "/Volumes/ClaveDisk/ada/profiles/chrome-work");
         assert!(r
             .env
             .iter()
-            .any(|(k, v)| k == "HOME" && v == "/Volumes/ClaveDisk/profiles/chrome-work"));
+            .any(|(k, v)| k == "HOME" && v == "/Volumes/ClaveDisk/ada"));
         assert!(r
             .env
             .iter()
-            .any(|(k, v)| k == "TMPDIR" && v == "/Volumes/ClaveDisk/tmp"));
+            .any(|(k, v)| k == "TMPDIR" && v == "/Volumes/ClaveDisk/ada/tmp"));
     }
 
     #[test]
     fn custom_launch_profile_overrides_and_seeds_windows_bits() {
         let profile = LaunchProfile {
-            home_subdir: "office".into(),
+            profile_subdir: "office".into(),
             container: ContainerKind::Native,
             args: vec![],
             env: vec![("CLAVE_ZONE".into(), "work".into())],
@@ -328,9 +334,13 @@ mod tests {
             passthrough_paths: vec![],
             seed_home: vec![],
         };
-        let r = profile.resolve(&AppId("office".into()), "X:");
-        assert_eq!(r.home, "X:/profiles/office");
-        assert_eq!(r.hive_path.as_deref(), Some("X:/registry/zone-default.hiv"));
+        let r = profile.resolve(&AppId("office".into()), "X:", "ada");
+        assert_eq!(r.home, "X:/ada");
+        assert_eq!(r.profile_dir, "X:/ada/profiles/office");
+        assert_eq!(
+            r.hive_path.as_deref(),
+            Some("X:/ada/registry/zone-default.hiv")
+        );
         assert_eq!(r.namespace_prefix.as_deref(), Some("Clave-work\\"));
         assert!(r.env.iter().any(|(k, v)| k == "CLAVE_ZONE" && v == "work"));
         assert!(r.args.is_empty(), "a native profile passes no launch args");
@@ -341,12 +351,12 @@ mod tests {
         let rule = AppRule::new(AppId("vscode-work".into()), chrome())
             .with_executable("/Applications/Visual Studio Code.app")
             .with_launch(LaunchProfile::chromium().with_seed_home([".zshrc", ".local"]));
-        let r = rule.launch.resolve(&rule.app_id, "/Volumes/ClaveDisk");
+        let r = rule.launch.resolve(&rule.app_id, "/Volumes/ClaveDisk", "ada");
         assert_eq!(
             r.seed_home,
             vec![".zshrc".to_string(), ".local".to_string()]
         );
-        let spec = rule.launch_spec("/Volumes/ClaveDisk");
+        let spec = rule.launch_spec("/Volumes/ClaveDisk", "ada");
         assert_eq!(
             spec.seed_home,
             vec![".zshrc".to_string(), ".local".to_string()]
@@ -357,10 +367,10 @@ mod tests {
     fn chromium_profile_isolates_the_profile_into_the_clave_disk() {
         let mut profile = LaunchProfile::chromium();
         profile.args = vec!["--restore-last-session".into()];
-        let r = profile.resolve(&AppId("chrome-work".into()), "/Volumes/ClaveDisk");
+        let r = profile.resolve(&AppId("chrome-work".into()), "/Volumes/ClaveDisk", "ada");
         assert_eq!(
-            r.args[0], "--user-data-dir=/Volumes/ClaveDisk/profiles/chrome-work",
-            "the private profile dir points into the Clave Disk"
+            r.args[0], "--user-data-dir=/Volumes/ClaveDisk/ada/profiles/chrome-work",
+            "the private profile dir points into the user's home on the Clave Disk"
         );
         assert!(r.args.iter().any(|a| a == "--no-first-run"));
         assert!(
@@ -374,18 +384,20 @@ mod tests {
         let rule = AppRule::new(AppId("chrome-work".into()), chrome())
             .with_launch(LaunchProfile::chromium())
             .with_executable("/Applications/Google Chrome.app");
-        let spec = rule.launch_spec("/Volumes/ClaveDisk");
+        let spec = rule.launch_spec("/Volumes/ClaveDisk", "ada");
         assert!(spec
             .args
             .iter()
-            .any(|a| a == "--user-data-dir=/Volumes/ClaveDisk/profiles/chrome-work"));
+            .any(|a| a == "--user-data-dir=/Volumes/ClaveDisk/ada/profiles/chrome-work"));
     }
 
     #[test]
     fn container_kind_missing_in_json_defaults_to_native() {
-        let json = r#"{"home_subdir":"","env":[],"namespace_prefix":null,"hive_seed":null,"passthrough_paths":[]}"#;
+        // legacy `home_subdir` key must still deserialize via the serde alias
+        let json = r#"{"home_subdir":"legacy","env":[],"namespace_prefix":null,"hive_seed":null,"passthrough_paths":[]}"#;
         let profile: LaunchProfile = serde_json::from_str(json).unwrap();
         assert_eq!(profile.container, ContainerKind::Native);
+        assert_eq!(profile.profile_subdir, "legacy");
         assert!(profile.args.is_empty());
     }
 }

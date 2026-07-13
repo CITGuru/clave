@@ -135,6 +135,8 @@ pub fn run_macos(profile: Profile) {
         .expect("tokio runtime");
 
     spawn_clipboard_guard(Arc::clone(&daemon), Arc::clone(&zones));
+    spawn_screen_watch(Arc::clone(&daemon), Arc::clone(&zones));
+    spawn_input_watch(Arc::clone(&daemon), Arc::clone(&zones));
 
     // The Clave Edge overlay owns the process **main thread** (AppKit is main-thread-only), so the
     // launcher IPC server runs on a worker thread. `CLAVE_EDGE=0` skips the overlay and serves the
@@ -173,6 +175,56 @@ fn spawn_clipboard_guard(daemon: Arc<Daemon>, zones: Arc<ZoneRegistry>) {
                     unix_now(),
                 )
                 .decision
+        });
+    });
+}
+
+/// Watch for screenshots taken over work content (doc 07 §3). macOS cannot stop them — it cannot
+/// exclude a window it does not own from capture — so this records them: the policy decision runs
+/// through [`Daemon::decide_action`], which audits every denial for the gateway.
+fn spawn_screen_watch(daemon: Arc<Daemon>, zones: Arc<ZoneRegistry>) {
+    std::thread::spawn(move || {
+        clave_mac::run_screen_watch(zones, move |capturer| {
+            let verdict = daemon.decide_action(
+                &clave_core::Action::ScreenCapture {
+                    // Identified, so the core can tell a work app capturing its own zone (in-bounds)
+                    // from anything else.
+                    proc: Some(crate::proc_id_for_pid(capturer.pid)),
+                    exe: capturer.exe.clone(),
+                },
+                unix_now(),
+            );
+            if !verdict.is_allow() {
+                eprintln!(
+                    "clave-daemon: {} (pid {}) captured the screen over work content — audited, \
+                     not blocked (macOS cannot exclude third-party windows from capture)",
+                    capturer.exe, capturer.pid
+                );
+            }
+        });
+    });
+}
+
+/// Watch for non-work processes reading the keyboard while a work app is focused (doc 06 §3). macOS
+/// ships no kernel input filter, so this records — it does not block — through
+/// [`Daemon::decide_action`], which audits every denial.
+fn spawn_input_watch(daemon: Arc<Daemon>, zones: Arc<ZoneRegistry>) {
+    std::thread::spawn(move || {
+        clave_mac::run_input_watch(zones, move |tapper| {
+            let verdict = daemon.decide_action(
+                &clave_core::Action::InputTap {
+                    proc: Some(crate::proc_id_for_pid(tapper.pid)),
+                    exe: tapper.exe.clone(),
+                },
+                unix_now(),
+            );
+            if !verdict.is_allow() {
+                eprintln!(
+                    "clave-daemon: {} (pid {}) is reading the keyboard while a work app is focused \
+                     — audited, not blocked (macOS ships no kernel input filter)",
+                    tapper.exe, tapper.pid
+                );
+            }
         });
     });
 }
@@ -262,9 +314,7 @@ fn demo_policy() -> clave_core::PolicyBundle {
         app(id, signing, name, exec).with_launch(LaunchProfile::chromium())
     }
 
-    // Code editors spawn login shells, so their contained HOME can't be empty or the user's shell
-    // rc files error out and no toolchains are on PATH. Seed the shell config + common toolchain
-    // dirs from the real home (lab-only convenience; see `seed_contained_home`).
+    // Editors spawn login shells; seed shell config + toolchains so rc files don't error and PATH works.
     fn editor_app(id: &str, signing: &str, name: &str, exec: &str) -> AppRule {
         app(id, signing, name, exec).with_launch(LaunchProfile::chromium().with_seed_home([
             ".zshenv",

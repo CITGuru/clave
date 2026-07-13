@@ -164,7 +164,8 @@ fn demo_launch_spec(app_id: &str) -> Option<LaunchInfo> {
     if !rule.is_launchable() {
         return None;
     }
-    Some(to_launch_info(rule.launch_spec(MOUNT)))
+    let user = std::env::var("USER").unwrap_or_else(|_| "user".to_string());
+    Some(to_launch_info(rule.launch_spec(MOUNT, &user)))
 }
 
 #[cfg(target_os = "macos")]

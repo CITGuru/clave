@@ -176,11 +176,11 @@ fn signed_policy_update_round_trips() {
     bundle.version = 9;
     let cmd = v
         .verify(
-            &s.sign(1, NOW, GatewayCommand::UpdatePolicy(bundle.clone())),
+            &s.sign(1, NOW, GatewayCommand::UpdatePolicy(Box::new(bundle.clone()))),
             NOW,
         )
         .unwrap();
-    assert_eq!(cmd, GatewayCommand::UpdatePolicy(bundle));
+    assert_eq!(cmd, GatewayCommand::UpdatePolicy(Box::new(bundle)));
 }
 
 #[test]

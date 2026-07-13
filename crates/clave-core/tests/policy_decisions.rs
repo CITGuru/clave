@@ -285,3 +285,98 @@ proptest! {
         prop_assert!(decide(&act, &zones, &pol, 1).is_allow());
     }
 }
+
+#[test]
+fn screen_capture_over_work_is_denied_by_default() {
+    let pol = PolicyBundle::restrictive_default();
+    let zones = ZoneRegistry::new();
+    let act = Action::ScreenCapture {
+        proc: Some(pid(9)),
+        exe: "screencapture".into(),
+    };
+    let v = decide(&act, &zones, &pol, 1);
+    assert_eq!(v.decision, Decision::Deny);
+    assert_eq!(v.reason, Reason::ScreenCapture);
+}
+
+#[test]
+fn a_work_process_may_capture_its_own_zone() {
+    let pol = PolicyBundle::restrictive_default();
+    let zones = ZoneRegistry::new();
+    let work = pid(9);
+    zones.join(work, JoinReason::Launcher);
+    let act = Action::ScreenCapture {
+        proc: Some(work),
+        exe: "screencapture".into(),
+    };
+    assert!(decide(&act, &zones, &pol, 1).is_allow());
+}
+
+#[test]
+fn policy_may_sanction_a_capture_tool() {
+    let mut pol = PolicyBundle::restrictive_default();
+    pol.screen.allowed_capturers = vec!["zoom.us".into()];
+    let zones = ZoneRegistry::new();
+
+    let sanctioned = Action::ScreenCapture {
+        proc: Some(pid(9)),
+        exe: "zoom.us".into(),
+    };
+    assert!(decide(&sanctioned, &zones, &pol, 1).is_allow());
+
+    let other = Action::ScreenCapture {
+        proc: Some(pid(9)),
+        exe: "obs".into(),
+    };
+    assert_eq!(decide(&other, &zones, &pol, 1).decision, Decision::Deny);
+}
+
+/// An unidentifiable capturer must not slip through as "not a work process, so allow" — it is the
+/// most suspicious case, not the least.
+#[test]
+fn an_unidentified_capturer_is_still_denied() {
+    let pol = PolicyBundle::restrictive_default();
+    let zones = ZoneRegistry::new();
+    let act = Action::ScreenCapture {
+        proc: None,
+        exe: String::new(),
+    };
+    assert_eq!(decide(&act, &zones, &pol, 1).decision, Decision::Deny);
+}
+
+#[test]
+fn input_tap_over_work_is_denied_by_default() {
+    let pol = PolicyBundle::restrictive_default();
+    let zones = ZoneRegistry::new();
+    let act = Action::InputTap {
+        proc: Some(pid(9)),
+        exe: "keylogger".into(),
+    };
+    let v = decide(&act, &zones, &pol, 1);
+    assert_eq!(v.decision, Decision::Deny);
+    assert_eq!(v.reason, Reason::InputTap);
+}
+
+#[test]
+fn a_work_process_may_tap_its_own_input() {
+    let pol = PolicyBundle::restrictive_default();
+    let zones = ZoneRegistry::new();
+    let work = pid(9);
+    zones.join(work, JoinReason::Launcher);
+    let act = Action::InputTap {
+        proc: Some(work),
+        exe: "keylogger".into(),
+    };
+    assert!(decide(&act, &zones, &pol, 1).is_allow());
+}
+
+#[test]
+fn policy_may_sanction_an_input_tapper() {
+    let mut pol = PolicyBundle::restrictive_default();
+    pol.input.allowed_tappers = vec!["TextExpander".into()];
+    let zones = ZoneRegistry::new();
+    let ok = Action::InputTap { proc: Some(pid(9)), exe: "TextExpander".into() };
+    assert!(decide(&ok, &zones, &pol, 1).is_allow());
+    let bad = Action::InputTap { proc: Some(pid(9)), exe: "keylogger".into() };
+    assert_eq!(decide(&bad, &zones, &pol, 1).decision, Decision::Deny);
+}

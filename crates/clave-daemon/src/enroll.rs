@@ -54,7 +54,7 @@ impl DeviceEnrollment {
                 .verify(signed, now)
                 .map_err(EnrollError::PolicyRejected)?
             {
-                GatewayCommand::UpdatePolicy(bundle) => Some(bundle),
+                GatewayCommand::UpdatePolicy(bundle) => Some(*bundle),
                 _ => return Err(EnrollError::NotAPolicyCommand),
             },
             None => None,
@@ -132,7 +132,7 @@ mod tests {
         signer: &GatewaySigningKey,
         bundle: PolicyBundle,
     ) -> clave_proto::SignedCommand {
-        signer.sign(1, 1_000, GatewayCommand::UpdatePolicy(bundle))
+        signer.sign(1, 1_000, GatewayCommand::UpdatePolicy(Box::new(bundle)))
     }
 
     fn issue(

@@ -16,6 +16,10 @@ pub struct PolicyBundle {
     pub apps: AppPolicy,
     #[serde(default)]
     pub overlay: OverlayPolicy,
+    #[serde(default)]
+    pub screen: ScreenPolicy,
+    #[serde(default)]
+    pub input: InputPolicy,
 }
 
 impl PolicyBundle {
@@ -38,8 +42,84 @@ impl PolicyBundle {
             },
             apps: AppPolicy::empty(),
             overlay: OverlayPolicy::default(),
+            screen: ScreenPolicy::default(),
+            input: InputPolicy::default(),
         }
     }
+}
+
+/// What may read the keyboard while a work app has focus.
+///
+/// Kept separate from [`ScreenPolicy`] even though the shape matches: an admin may well sanction a
+/// meeting app to capture the screen while never sanctioning anything to read keystrokes.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InputPolicy {
+    /// What to do when a non-work process holds a keyboard event tap while a work app is focused.
+    #[serde(default = "default_on_tap")]
+    pub on_tap: Decision,
+    /// Tools permitted to tap the keyboard even under a work app — a text expander or hotkey
+    /// launcher the company sanctions. Matched against the process's executable name.
+    #[serde(default)]
+    pub allowed_tappers: Vec<String>,
+}
+
+impl Default for InputPolicy {
+    fn default() -> Self {
+        Self {
+            on_tap: default_on_tap(),
+            allowed_tappers: Vec::new(),
+        }
+    }
+}
+
+impl InputPolicy {
+    pub fn is_allowed_tapper(&self, exe: &str) -> bool {
+        self.allowed_tappers.iter().any(|a| a == exe)
+    }
+}
+
+/// Deny by default: nothing outside the enclave reads work keystrokes. macOS cannot *enforce* this
+/// (doc 06 §3.1 — no shippable kernel input filter); the denial is still the decision, and an
+/// unenforceable one is audited.
+fn default_on_tap() -> Decision {
+    Decision::Deny
+}
+
+/// What may capture the screen while work windows are on it.
+///
+/// A capture is only ever a *work* concern when work content is actually visible — a screenshot of
+/// a personal desktop is none of our business (doc 01: personal resources are never instrumented).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ScreenPolicy {
+    /// What to do when a non-work process captures the screen while work windows are visible.
+    #[serde(default = "default_on_capture")]
+    pub on_capture: Decision,
+    /// Capture tools permitted even over work content — e.g. the sanctioned meeting app that
+    /// employees are expected to screen-share from. Matched against the process's executable name.
+    #[serde(default)]
+    pub allowed_capturers: Vec<String>,
+}
+
+impl Default for ScreenPolicy {
+    fn default() -> Self {
+        Self {
+            on_capture: default_on_capture(),
+            allowed_capturers: Vec::new(),
+        }
+    }
+}
+
+impl ScreenPolicy {
+    /// Whether `exe` (a process's executable name) is a sanctioned capture tool.
+    pub fn is_allowed_capturer(&self, exe: &str) -> bool {
+        self.allowed_capturers.iter().any(|a| a == exe)
+    }
+}
+
+/// Deny by default: work content is not screenshot-able. macOS cannot always *enforce* this
+/// (doc 07 §3.4) — the decision is still the decision, and an unenforceable denial is audited.
+fn default_on_capture() -> Decision {
+    Decision::Deny
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
