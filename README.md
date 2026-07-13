@@ -49,19 +49,14 @@ The security-critical logic lives in one portable core that runs and is fully te
 | `clave-daemon-host` | macOS-only `#[no_mangle]` FFI shim: the signed `ClaveDaemonHost` app's entry into `clave-daemon` (kept out of `clave-daemon`, which forbids unsafe code) |
 | `clave-net`      | `SplitRouter` flow routing + `Tunnel` seam + boringtun WireGuard data plane (feature `wireguard`)                      |
 | `clave-volume`   | Encrypted Clave Disk crypto core: AES-256-XTS, KEK/DEK hierarchy, crypto-shred wipe, X25519 enrollment sealed-box      |
-| `clave-mac`      | macOS adapter: `MacPlatform` + ES/NE C ABI + Secure-Enclave-sealed volume passphrase (+ Swift scaffolds)               |
+| `clave-mac`      | macOS adapter: `MacPlatform` + ES C ABI + `hdiutil` Clave Disk mount + Secure-Enclave key sealing (+ the Xcode hosts)  |
 | `clave-win`      | Windows adapter: `WindowsPlatform` + shared routing (+ WFP/minifilter scaffold)                                        |
-
-
-
 
 ## Requirements
 
 - **Rust** (stable) with Cargo.
 - **Node** (for the Tauri desktop launcher only).
 - **Docker** (for the live-Postgres gateway tests only).
-
-
 
 ## Build & run
 
@@ -77,9 +72,7 @@ cargo run -p clave-cli -- apps policy.json   # launcher catalog from a policy bu
 cd apps/clave-launcher && npm install && npm run tauri dev
 ```
 
-On macOS the daemon runs under one of two profiles, each with its own Clave Disk. `cargo run` is
-the unsigned **dev** profile (plain-Keychain disk). The **signed host** — the only build that can
-reach the Secure Enclave — is an Xcode target:
+On macOS the daemon runs under one of two profiles, each with its own Clave Disk. `cargo run` is the unsigned **dev** profile (plain-Keychain disk). The **signed host** — the only build that can reach the Secure Enclave — is an Xcode target:
 
 ```sh
 cd crates/clave-mac/macos
@@ -87,8 +80,6 @@ xcodebuild -project ClaveES.xcodeproj -scheme ClaveDaemonHost \
   -configuration Release -derivedDataPath build -allowProvisioningUpdates build
 open build/Build/Products/Release/ClaveDaemonHost.app
 ```
-
-
 
 ### Feature-gated pieces
 
@@ -104,8 +95,6 @@ docker compose -f crates/clave-gateway/docker-compose.yml up -d db
 CLAVE_TEST_DATABASE_URL=postgres://clave:clave@localhost:5432/clave \
   cargo test -p clave-gateway --features postgres --test postgres_store
 ```
-
-
 
 ## Documentation
 
