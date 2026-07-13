@@ -1,5 +1,3 @@
-//! Worked examples for the identity authorization brain.
-
 use clave_identity::{
     accept_invitation, authorize_enrollment, authorize_login, can, AdminAction, AuthMethod,
     DenyReason, EmailAddr, EnrollmentDecision, Invitation, InviteError, LoginDecision, Membership,
@@ -41,7 +39,12 @@ fn active_member_logs_in_with_their_role() {
 fn non_member_is_denied() {
     let ws = workspace(&[], SsoMode::Optional);
     assert_eq!(
-        authorize_login(&email("stranger@evil.com"), AuthMethod::EmailCode, &ws, None),
+        authorize_login(
+            &email("stranger@evil.com"),
+            AuthMethod::EmailCode,
+            &ws,
+            None
+        ),
         LoginDecision::Deny(DenyReason::NotAMember)
     );
 }
@@ -71,7 +74,12 @@ fn wrong_domain_is_denied_even_for_a_member() {
     let ws = workspace(&["acme.com"], SsoMode::Optional);
     let m = member(&ws, Role::Admin, MembershipStatus::Active);
     assert_eq!(
-        authorize_login(&email("user@gmail.com"), AuthMethod::Password, &ws, Some(&m)),
+        authorize_login(
+            &email("user@gmail.com"),
+            AuthMethod::Password,
+            &ws,
+            Some(&m)
+        ),
         LoginDecision::Deny(DenyReason::DomainNotAllowed)
     );
 }
@@ -80,7 +88,9 @@ fn wrong_domain_is_denied_even_for_a_member() {
 fn allowed_domain_matches_case_insensitively() {
     let ws = workspace(&["Acme.COM"], SsoMode::Optional);
     let m = member(&ws, Role::Member, MembershipStatus::Active);
-    assert!(authorize_login(&email("User@ACME.com"), AuthMethod::Password, &ws, Some(&m)).is_allowed());
+    assert!(
+        authorize_login(&email("User@ACME.com"), AuthMethod::Password, &ws, Some(&m)).is_allowed()
+    );
 }
 
 #[test]
@@ -170,7 +180,14 @@ fn expired_invitation_is_rejected() {
     let ws = workspace(&[], SsoMode::Optional);
     let inv = invite(&ws, "late@acme.com", Role::Member, 1_000);
     assert_eq!(
-        accept_invitation(UserId(1), &email("late@acme.com"), AuthMethod::EmailCode, &ws, &inv, 1_001),
+        accept_invitation(
+            UserId(1),
+            &email("late@acme.com"),
+            AuthMethod::EmailCode,
+            &ws,
+            &inv,
+            1_001
+        ),
         Err(InviteError::Expired)
     );
 }
@@ -180,7 +197,14 @@ fn invitation_for_another_email_is_rejected() {
     let ws = workspace(&[], SsoMode::Optional);
     let inv = invite(&ws, "intended@acme.com", Role::Member, 1_000);
     assert_eq!(
-        accept_invitation(UserId(1), &email("someone@acme.com"), AuthMethod::EmailCode, &ws, &inv, 500),
+        accept_invitation(
+            UserId(1),
+            &email("someone@acme.com"),
+            AuthMethod::EmailCode,
+            &ws,
+            &inv,
+            500
+        ),
         Err(InviteError::EmailMismatch)
     );
 }
@@ -191,7 +215,14 @@ fn already_accepted_invitation_is_rejected() {
     let mut inv = invite(&ws, "dup@acme.com", Role::Member, 1_000);
     inv.accepted = true;
     assert_eq!(
-        accept_invitation(UserId(1), &email("dup@acme.com"), AuthMethod::EmailCode, &ws, &inv, 500),
+        accept_invitation(
+            UserId(1),
+            &email("dup@acme.com"),
+            AuthMethod::EmailCode,
+            &ws,
+            &inv,
+            500
+        ),
         Err(InviteError::AlreadyAccepted)
     );
 }

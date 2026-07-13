@@ -1,9 +1,3 @@
-//! Phase-3 exit criteria, as portable assertions.
-//!
-//! These exercise the encrypted-volume *crypto core* end to end with no OS: the WinFsp / APFS
-//! mount and the TPM / Secure Enclave are the only OS-specific pieces, and are stood in for by
-//! the in-memory [`MemKeyStore`] / [`MemBacking`] doubles.
-
 use std::sync::Arc;
 
 use clave_core::{JoinReason, ZoneRegistry};
@@ -67,8 +61,6 @@ fn work_app_reads_and_writes_through_the_enclave() {
 
 #[test]
 fn personal_app_cannot_read_the_disk_even_mounted() {
-    // exit criterion: a personal (unsupervised) process is denied even with the
-    // volume mounted — the gate is identity-authoritative, not mount-state.
     let mut e = provisioned();
     e.vol.unlock().unwrap();
     e.vol.write(&e.work, 0, &vec![7u8; SECTOR_SIZE]).unwrap();
@@ -83,31 +75,24 @@ fn personal_app_cannot_read_the_disk_even_mounted() {
 
 #[test]
 fn thief_with_the_powered_off_container_gets_nothing() {
-    // an offline attacker has only the ciphertext blob and no DEK (it lives only in
-    // the secure element, here MemKeyStore). The container bytes are opaque; without an unlock
-    // there is no way to turn them into plaintext.
     let mut e = provisioned();
     e.vol.unlock().unwrap();
     let secret = vec![0x5Au8; SECTOR_SIZE];
     e.vol.write(&e.work, 0, &secret).unwrap();
     e.vol.lock();
 
-    // What the thief can see: the raw on-disk bytes are ciphertext, not the plaintext...
     let stolen = e.backing.raw();
     assert_ne!(
         &stolen[..SECTOR_SIZE],
         secret.as_slice(),
         "the blob on disk is ciphertext"
     );
-    // ...and a locked volume yields nothing.
     let mut buf = vec![0u8; SECTOR_SIZE];
     assert_eq!(e.vol.read(&e.work, 0, &mut buf), Err(VolumeError::Locked));
 }
 
 #[test]
 fn remote_wipe_crypto_shreds_in_o1_and_is_irreversible() {
-    // wipe = evict the DEK + destroy the wrapped key + set the marker. The container
-    // blob may linger, but it is unrecoverable and a future mount fails closed.
     let mut e = provisioned();
     e.vol.unlock().unwrap();
     e.vol.write(&e.work, 0, &vec![0xFFu8; SECTOR_SIZE]).unwrap();
@@ -121,10 +106,8 @@ fn remote_wipe_crypto_shreds_in_o1_and_is_irreversible() {
     );
     assert!(e.backing.is_wiped(), "wipe marker set");
 
-    // The ciphertext blob lingers but cannot be remounted — fail-closed on the marker.
     assert_eq!(e.vol.unlock(), Err(VolumeError::WipeMarkerSet));
 
-    // Even a brand-new volume handle over the same lingering container refuses to mount.
     let mut fresh = ClaveVolume::new(
         ContainerMeta::new(e.id),
         e.keystore.clone(),
@@ -136,14 +119,11 @@ fn remote_wipe_crypto_shreds_in_o1_and_is_irreversible() {
 
 #[test]
 fn wipe_without_a_marker_still_fails_closed_on_the_missing_key() {
-    // The marker and the destroyed key are independent fail-closed gates. Even if the marker
-    // never landed (e.g. the blob was restored from a backup that predates it), the missing
-    // wrapped key alone keeps the container unrecoverable.
     let mut e = provisioned();
     e.vol.unlock().unwrap();
-    e.keystore.destroy(e.id).unwrap(); // crypto-shred, but no marker on this fresh backing
+    e.keystore.destroy(e.id).unwrap();
 
-    let backing = Arc::new(MemBacking::zeroed(64)); // a marker-less copy of the container
+    let backing = Arc::new(MemBacking::zeroed(64));
     let mut restored = ClaveVolume::new(
         ContainerMeta::new(e.id),
         e.keystore.clone(),
@@ -155,9 +135,6 @@ fn wipe_without_a_marker_still_fails_closed_on_the_missing_key() {
 
 #[test]
 fn wipe_leaves_personal_data_untouched() {
-    // the wipe destroys only the enclave's key + container; anything outside is never
-    // referenced. We model "personal data" as a second, independent backing store the wipe path
-    // never touches.
     let mut e = provisioned();
     e.vol.unlock().unwrap();
 

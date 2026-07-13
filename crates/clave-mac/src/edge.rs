@@ -1,16 +1,4 @@
-//! The native Clave Edge drawer for macOS — the OS half of [doc 09](../../../docs/09-visual-border-overlay.md).
-//!
-//! Each tick: read supervised pids from the shared [`ZoneRegistry`], enumerate on-screen windows
-//! front-to-back with `CGWindowListCopyWindowInfo` (bounds + owner pid + z-order need no special
-//! permission), clip each work window's ring via [`clave_core::recompute_frames`], and paint the
-//! rectangles as `CALayer`s on a borderless, click-through, transparent desktop-spanning `NSWindow`.
-//! A dev-grade affordance, not a security control: it never claims `Enforced`.
-//!
-//! Threading: AppKit is main-thread-only, so [`run_clave_edge`] must run on the process main thread
-//! (and never returns); run the IPC server elsewhere.
-
 #![cfg(target_os = "macos")]
-// `cocoa` is deprecated in favor of `objc2`; used deliberately here to keep the FFI small.
 #![allow(deprecated)]
 
 use std::collections::HashSet;
@@ -27,8 +15,6 @@ use clave_core::{recompute_frames_themed, BorderCfg, RectPx, WindowGeom, ZoneReg
 use clave_platform::{Rgba, WindowId};
 
 use crate::platform::TrackedWindows;
-
-// --- CoreGraphics / CoreFoundation FFI (window list) -------------------------------------------
 
 type CFTypeRef = *const c_void;
 
@@ -75,13 +61,10 @@ extern "C" {
     fn CGRectMakeWithDictionaryRepresentation(dict: CFTypeRef, rect: *mut CgRect) -> u8;
 }
 
-// CALayer lives in QuartzCore; force-link so `class!(CALayer)` resolves at runtime.
 #[link(name = "QuartzCore", kind = "framework")]
 extern "C" {}
 
-/// `kCFNumberSInt64Type`.
 const CF_NUMBER_SINT64: isize = 4;
-/// `kCGWindowListOptionOnScreenOnly | kCGWindowListExcludeDesktopElements`.
 const WINDOW_LIST_OPTION: u32 = (1 << 0) | (1 << 4);
 const NULL_WINDOW_ID: u32 = 0;
 
@@ -115,10 +98,6 @@ unsafe fn dict_rect(dict: CFTypeRef, key: CFTypeRef) -> Option<CgRect> {
     Some(r)
 }
 
-// --- Overlay setup -----------------------------------------------------------------------------
-
-/// The desktop bounds (Cocoa global coords) plus the primary display height used to flip
-/// CoreGraphics' top-left/y-down coordinates into Cocoa's bottom-left/y-up.
 struct ScreenSpace {
     min_x: f64,
     min_y: f64,
@@ -140,7 +119,6 @@ unsafe fn screen_space() -> ScreenSpace {
         min_y = min_y.min(f.origin.y);
         max_x = max_x.max(f.origin.x + f.size.width);
         max_y = max_y.max(f.origin.y + f.size.height);
-        // The primary (menu-bar) display sits at Cocoa origin (0,0); its height is the flip axis.
         if f.origin.x == 0.0 && f.origin.y == 0.0 {
             primary_height = f.size.height;
         }
@@ -166,10 +144,6 @@ unsafe fn screen_space() -> ScreenSpace {
     }
 }
 
-/// Run the Clave Edge overlay loop forever (main thread only). `zones.supervised_pids()` and
-/// `tracked` pick which windows to frame; `cfg_of` is read every frame so a live policy update
-/// re-themes the border with no restart. The overlay is capture-excluded unless
-/// `CLAVE_EDGE_CAPTURE=1`; poll cadence is `CLAVE_EDGE_MS` (default 100).
 pub fn run_clave_edge(
     zones: Arc<ZoneRegistry>,
     tracked: TrackedWindows,
@@ -186,7 +160,6 @@ pub fn run_clave_edge(
 
     unsafe {
         let app: id = msg_send![class!(NSApplication), sharedApplication];
-        // Accessory: no Dock icon, no menu bar — it's an overlay, not an app.
         let _: () = msg_send![app, setActivationPolicy: 1i64];
 
         let space = screen_space();
@@ -195,7 +168,6 @@ pub fn run_clave_edge(
             NSSize::new(space.width, space.height),
         );
 
-        // Borderless (0), buffered (2), non-deferred.
         let window: id = msg_send![class!(NSWindow), alloc];
         let window: id = msg_send![window,
             initWithContentRect: frame
@@ -207,11 +179,8 @@ pub fn run_clave_edge(
         let _: () = msg_send![window, setBackgroundColor: clear];
         let _: () = msg_send![window, setIgnoresMouseEvents: YES];
         let _: () = msg_send![window, setHasShadow: NO];
-        // Floating level: above normal app windows; occlusion is done by clipping, not by z-level.
         let _: () = msg_send![window, setLevel: 3i64];
-        // canJoinAllSpaces | stationary | ignoresCycle → glued across Spaces, out of Cmd-` cycling.
         let _: () = msg_send![window, setCollectionBehavior: (1u64 | (1 << 4) | (1 << 6))];
-        // NSWindowSharingNone(0) excludes the border from capture; ReadOnly(1) shows it (dev).
         let _: () = msg_send![window, setSharingType: if visible_in_capture { 1u64 } else { 0u64 }];
 
         let content: id = msg_send![window, contentView];
@@ -227,7 +196,6 @@ pub fn run_clave_edge(
         loop {
             let pool: id = NSAutoreleasePool::new(nil);
 
-            // Drain any pending AppKit events (non-blocking) so the window stays live/composited.
             let distant_past: id = msg_send![class!(NSDate), distantPast];
             loop {
                 let event: id = msg_send![app,
@@ -241,7 +209,6 @@ pub fn run_clave_edge(
                 let _: () = msg_send![app, sendEvent: event];
             }
 
-            // Read the live appearance each frame so a policy update re-themes the border.
             let cfg = cfg_of();
             let segments = compute_segments(&zones, &tracked, &cfg, own_pid, &space, debug);
             paint(root_layer, &segments);
@@ -252,9 +219,6 @@ pub fn run_clave_edge(
     }
 }
 
-/// Enumerate on-screen windows, pick the supervised ones, and return the border rectangles to paint
-/// in Cocoa view-local coordinates, each tagged with its color. A tracked window keeps its
-/// `track(window, color)` color; a pid-matched window uses the policy default.
 unsafe fn compute_segments(
     zones: &ZoneRegistry,
     tracked: &TrackedWindows,
@@ -264,7 +228,6 @@ unsafe fn compute_segments(
     debug: bool,
 ) -> Vec<(NSRect, Rgba)> {
     let supervised: HashSet<u32> = zones.supervised_pids().into_iter().collect();
-    // Explicitly-tracked windows (shim/ES path) and the color each should be framed in.
     let tracked_colors: std::collections::HashMap<WindowId, Rgba> =
         tracked.lock().expect("overlay lock poisoned").clone();
     if debug {
@@ -291,12 +254,10 @@ unsafe fn compute_segments(
         if dict.is_null() {
             continue;
         }
-        // Only normal app windows (layer 0); skip the menu bar, Dock, wallpaper, etc.
         if dict_i64(dict, kCGWindowLayer).unwrap_or(1) != 0 {
             continue;
         }
         let owner = dict_i64(dict, kCGWindowOwnerPID).unwrap_or(0) as u32;
-        // Never treat our own overlay as an occluder.
         if owner == own_pid {
             continue;
         }
@@ -330,12 +291,10 @@ unsafe fn compute_segments(
         );
     }
 
-    // The core resolves each frame's color: a tracked override wins over the policy default.
     let frames = recompute_frames_themed(&windows, &work, cfg, &tracked_colors);
     let mut segments = Vec::new();
     for frame in frames {
         for s in frame.segments {
-            // CoreGraphics (top-left, y-down, global) → Cocoa view-local (bottom-left, y-up).
             let local_x = s.x as f64 - space.min_x;
             let local_y = (space.primary_height - (s.y as f64 + s.h as f64)) - space.min_y;
             let rect = NSRect::new(
@@ -351,8 +310,6 @@ unsafe fn compute_segments(
     segments
 }
 
-/// Replace the overlay's sublayers with one colored layer per segment, animation-free. Distinct
-/// colors are resolved to a `CGColor` once per frame and reused.
 unsafe fn paint(root_layer: id, segments: &[(NSRect, Rgba)]) {
     let _: () = msg_send![class!(CATransaction), begin];
     let _: () = msg_send![class!(CATransaction), setDisableActions: YES];

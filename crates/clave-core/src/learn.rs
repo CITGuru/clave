@@ -1,38 +1,23 @@
-//! "Learn mode": run a new app in notify-only mode, accumulate what it touches, and
-//! [`LearnSession::synthesize`] a candidate [`LaunchProfile`] the admin curates — directories it
-//! wrote to become [`FilePolicy::work_data_roots`](crate::policy::FilePolicy), and a named-object
-//! sighting suggests a namespace prefix.
-
 use crate::app::{AppId, LaunchProfile};
 use crate::path::under;
 use serde::{Deserialize, Serialize};
 
-/// One thing a watched app touched while running in notify-only learn mode.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Observation {
-    /// A filesystem access. `write` distinguishes data the app *persists* (a work-data-root
-    /// candidate) from reads (which pass through by default, so they need no profile entry).
     PathAccess { path: String, write: bool },
-    /// A named kernel object (mutex / event / section). Its presence implies the app expects a
-    /// singleton, so the work instance needs a namespace prefix to coexist.
     NamedObject { name: String },
 }
 
-/// A learn-mode session accumulating one app's observations.
 #[derive(Clone, Debug)]
 pub struct LearnSession {
     app_id: AppId,
     observations: Vec<Observation>,
 }
 
-/// A synthesized candidate — *suggestions* an admin reviews, never auto-applied policy.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LearnedProfile {
     pub app_id: AppId,
-    /// Parent directories of files the app wrote outside the Clave Disk — candidate
-    /// [`FilePolicy::work_data_roots`](crate::policy::FilePolicy).
     pub work_data_roots: Vec<String>,
-    /// The candidate launch profile (container HOME + a namespace prefix if it used named objects).
     pub launch: LaunchProfile,
 }
 
@@ -44,7 +29,6 @@ impl LearnSession {
         }
     }
 
-    /// Record one observed access (fed by the OS notify-mode hook / ES-notify client).
     pub fn record(&mut self, obs: Observation) {
         self.observations.push(obs);
     }
@@ -57,9 +41,6 @@ impl LearnSession {
         self.observations.is_empty()
     }
 
-    /// Synthesize candidates from what was observed, relative to the Clave Disk at `mount_point`.
-    /// Writes already inside the disk and reads are ignored; the rest yield work-data-root
-    /// suggestions (deduped, sorted) plus a namespace prefix if any named object was seen.
     pub fn synthesize(&self, mount_point: &str) -> LearnedProfile {
         let mut work_data_roots: Vec<String> = Vec::new();
         let mut uses_named_objects = false;
@@ -67,7 +48,6 @@ impl LearnSession {
         for obs in &self.observations {
             match obs {
                 Observation::PathAccess { path, write: true } => {
-                    // Already-contained writes need no redirection; only escapes do.
                     if !under(path, mount_point) {
                         if let Some(dir) = parent_dir(path) {
                             if !work_data_roots.iter().any(|r| r == dir) {
@@ -76,7 +56,7 @@ impl LearnSession {
                         }
                     }
                 }
-                Observation::PathAccess { write: false, .. } => {} // reads pass through by default
+                Observation::PathAccess { write: false, .. } => {}
                 Observation::NamedObject { .. } => uses_named_objects = true,
             }
         }
@@ -100,8 +80,6 @@ impl LearnSession {
     }
 }
 
-/// The directory portion of `path` (everything before the last `/` or `\`), or `None` for a
-/// top-level path with no usable parent.
 fn parent_dir(path: &str) -> Option<&str> {
     path.rfind(['/', '\\'])
         .map(|i| &path[..i])
@@ -125,13 +103,13 @@ mod tests {
     fn synthesizes_work_data_roots_from_writes_only() {
         let mut s = LearnSession::new(AppId("acme".into()));
         s.record(write("/Users/alice/Documents/a.txt"));
-        s.record(write("/Users/alice/Documents/b.txt")); // same dir → deduped
-        s.record(write("/Users/alice/Library/Acme/state")); // a second dir
+        s.record(write("/Users/alice/Documents/b.txt"));
+        s.record(write("/Users/alice/Library/Acme/state"));
         s.record(Observation::PathAccess {
             path: "/usr/lib/x.dylib".into(),
             write: false,
-        }); // a read → ignored
-        s.record(write("/Volumes/ClaveDisk/profiles/acme/c")); // already inside → ignored
+        });
+        s.record(write("/Volumes/ClaveDisk/profiles/acme/c"));
 
         let learned = s.synthesize("/Volumes/ClaveDisk");
         assert_eq!(
@@ -152,13 +130,14 @@ mod tests {
             name: "AcmeSingletonMutex".into(),
         });
         let learned = s.synthesize("/Volumes/ClaveDisk");
-        assert_eq!(learned.launch.namespace_prefix.as_deref(), Some("Clave-acme\\"));
+        assert_eq!(
+            learned.launch.namespace_prefix.as_deref(),
+            Some("Clave-acme\\")
+        );
     }
 
     #[test]
     fn learned_roots_then_drive_classify_path() {
-        // The loop closes: what learn mode discovers, applied as policy, makes classify_path
-        // redirect the app's future writes into the enclave.
         let mut s = LearnSession::new(AppId("acme".into()));
         s.record(write("/Users/alice/Documents/a.txt"));
         let learned = s.synthesize("/Volumes/ClaveDisk");
@@ -169,7 +148,12 @@ mod tests {
             cow_roots: Vec::new(),
         };
         assert_eq!(
-            classify_path("/Users/alice/Documents/new.txt", "/Volumes/ClaveDisk", &[], &files),
+            classify_path(
+                "/Users/alice/Documents/new.txt",
+                "/Volumes/ClaveDisk",
+                &[],
+                &files
+            ),
             PathClass::WorkData
         );
     }

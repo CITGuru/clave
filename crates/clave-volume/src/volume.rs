@@ -1,20 +1,3 @@
-//! [`ClaveVolume`] — the portable mount lifecycle.
-//!
-//! Ties the key hierarchy, the XTS block layer, the backing container, and the runtime access
-//! gate into one fail-closed object. Tested here, with no OS:
-//!
-//! * **unlock** — refuse a wiped container, ask the key store to unwrap the DEK, bring up the
-//!   XTS cipher in zeroizing memory;
-//! * **lock** — drop (zeroize) the cipher/DEK so reads fail closed;
-//! * **read / write** — sector I/O through XTS, plaintext never reaching the backing store;
-//! * **access gate** — only supervised (work-zone) callers, *even while mounted*;
-//! * **wipe** — crypto-shred remote wipe + a fail-closed mount refusal afterward.
-//!
-//! OS-specific and therefore *not* here: the WinFsp / APFS mount, and the TPM / Secure Enclave
-//! behind [`KeyStore`]. The OS adapter shares the daemon's `Arc<Mutex<ClaveVolume>>` (via
-//! `Daemon::volume_handle`) and implements `clave_platform::VolumeMount` over it — one instance,
-//! one DEK, one lock state, so a remote wipe halts the live mount.
-
 use std::sync::Arc;
 
 use clave_platform::{ProcId, ProcessSupervisor};
@@ -24,21 +7,15 @@ use crate::store::KeyStore;
 use crate::xts::{XtsCipher, SECTOR_SIZE};
 use crate::VolumeError;
 
-/// The encrypted Clave Disk, portable core. Locked at construction; [`ClaveVolume::unlock`] mounts.
 pub struct ClaveVolume {
     meta: ContainerMeta,
     keystore: Arc<dyn KeyStore>,
     backing: Arc<dyn BackingStore>,
-    /// The runtime access gate: authoritative work-zone membership. Personal processes
-    /// are denied even while the volume is mounted.
     gate: Arc<dyn ProcessSupervisor>,
-    /// `Some` only while unlocked. The DEK-derived cipher lives in zeroizing memory and is
-    /// dropped (zeroized) on lock/wipe; `None` ⇒ locked ⇒ all I/O fails closed.
     cipher: Option<XtsCipher>,
 }
 
 impl ClaveVolume {
-    /// Create a locked volume over `meta`'s container. Call [`ClaveVolume::unlock`] to mount.
     pub fn new(
         meta: ContainerMeta,
         keystore: Arc<dyn KeyStore>,
@@ -58,37 +35,26 @@ impl ClaveVolume {
         self.cipher.is_some()
     }
 
-    /// The container this volume targets. The daemon matches it against a gateway
-    /// [`Wipe`](../clave_proto/enum.GatewayCommand.html) command's `container` so a wipe meant for
-    /// another device can't destroy this one.
     pub fn container_id(&self) -> ContainerId {
         self.meta.id
     }
 
-    /// Unlock the volume: refuse a wiped/half-wiped container, ask the hardware store to unwrap
-    /// the DEK, and bring up the XTS cipher in zeroizing memory. Fail-closed throughout.
     pub fn unlock(&mut self) -> Result<(), VolumeError> {
         if self.backing.is_wiped() {
             return Err(VolumeError::WipeMarkerSet);
         }
-        // `contains` gives a precise error; `unwrap_dek` is the authority and also fails closed.
         if !self.keystore.contains(self.meta.id) {
             return Err(VolumeError::KeyDestroyed);
         }
         let dek = self.keystore.unwrap_dek(self.meta.id)?;
         self.cipher = Some(XtsCipher::new(&dek));
-        // `dek` is dropped here → zeroized.
         Ok(())
     }
 
-    /// Lock the volume: drop (zeroize) the cipher/DEK. Reads now fail closed.
     pub fn lock(&mut self) {
         self.cipher = None;
     }
 
-    /// Read `out.len()` bytes of plaintext starting at `first_sector`. Enforces the access gate,
-    /// reads the ciphertext sectors from the backing store, then decrypts in place. `out` must
-    /// be a whole number of [`SECTOR_SIZE`] sectors.
     pub fn read(
         &self,
         caller: &ProcId,
@@ -109,8 +75,6 @@ impl ClaveVolume {
         Ok(())
     }
 
-    /// Encrypt and write `data` (sector-aligned) starting at `first_sector`. Plaintext never
-    /// reaches the backing store — encryption happens before the write.
     pub fn write(
         &self,
         caller: &ProcId,
@@ -129,20 +93,13 @@ impl ClaveVolume {
         Ok(())
     }
 
-    /// **Remote wipe** (crypto-shred): evict the DEK from memory, destroy the wrapped
-    /// key so the container is unrecoverable in O(1), then set the wipe marker so a future mount
-    /// fails closed even if the ciphertext blob still lingers (offline-mid-wipe). Personal data
-    /// is untouched — it is never inside the container.
     pub fn wipe(&mut self) -> Result<(), VolumeError> {
-        self.cipher = None; // live data instantly dark (zeroize)
-        self.keystore.destroy(self.meta.id)?; // unrecoverable, O(1)
-        self.backing.set_wipe_marker()?; // refuse any future mount
+        self.cipher = None;
+        self.keystore.destroy(self.meta.id)?;
+        self.backing.set_wipe_marker()?;
         Ok(())
     }
 
-    /// The per-I/O gate: the caller must be supervised *and* the volume unlocked. Checking
-    /// identity before lock state means a personal process can't even probe the mount state — it
-    /// is denied unconditionally.
     fn authorize(&self, caller: &ProcId) -> Result<&XtsCipher, VolumeError> {
         if !self.gate.is_supervised(caller) {
             return Err(VolumeError::AccessDenied);
@@ -228,7 +185,7 @@ mod tests {
     fn personal_caller_denied_even_when_mounted() {
         let mut f = setup();
         f.vol.unlock().unwrap();
-        let personal = ProcId::windows(777, 1); // never joined the zone
+        let personal = ProcId::windows(777, 1);
         let mut got = vec![0u8; SECTOR_SIZE];
         assert_eq!(
             f.vol.read(&personal, 0, &mut got),
@@ -260,7 +217,7 @@ mod tests {
         let plaintext = vec![0x99u8; SECTOR_SIZE];
         f.vol.write(&caller, 3, &plaintext).unwrap();
         f.vol.lock();
-        f.vol.unlock().unwrap(); // fresh DEK unwrap, same key
+        f.vol.unlock().unwrap();
         let mut got = vec![0u8; SECTOR_SIZE];
         f.vol.read(&caller, 3, &mut got).unwrap();
         assert_eq!(got, plaintext);

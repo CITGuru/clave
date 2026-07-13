@@ -1,26 +1,14 @@
-//! The opaque ciphertext container + its metadata and wipe marker.
-//!
-//! On a real OS this is a WinFsp backing file (Windows) or sparsebundle band files (macOS); the
-//! [`BackingStore`] seam abstracts it so the XTS layer and the mount lifecycle test with no
-//! filesystem. The store is **opaque ciphertext**: it never holds a key and never sees
-//! plaintext, so a thief with the powered-off container learns nothing.
-
 use std::sync::Mutex;
 
 use crate::xts::SECTOR_SIZE;
 use crate::VolumeError;
 
-/// Opaque per-container identity (the container UUID; a `u128` here to avoid a `uuid` dep).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct ContainerId(pub u128);
 
-/// Non-secret container metadata, kept in `.clave-meta` next to the ciphertext. It
-/// only *identifies* which wrapped key to ask the hardware store for — it holds no key material,
-/// so it is safe in the clear.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ContainerMeta {
     pub id: ContainerId,
-    /// Bumped on DEK rotation so the right wrapped key is selected (forward-compat).
     pub key_version: u32,
 }
 
@@ -30,19 +18,14 @@ impl ContainerMeta {
     }
 }
 
-/// Sector-addressed opaque ciphertext store. All reads/writes are whole [`SECTOR_SIZE`] sectors
-/// of ciphertext; the `.clave-wipe-marker` is set during a wipe and checked at mount.
 pub trait BackingStore: Send + Sync {
     fn read_sector(&self, sector: u64, buf: &mut [u8]) -> Result<(), VolumeError>;
     fn write_sector(&self, sector: u64, buf: &[u8]) -> Result<(), VolumeError>;
     fn sector_count(&self) -> u64;
-    /// Set `.clave-wipe-marker`. Afterward the container refuses to mount even if its blob still
-    /// lingers (e.g. the device went offline mid-wipe) — fail-closed.
     fn set_wipe_marker(&self) -> Result<(), VolumeError>;
     fn is_wiped(&self) -> bool;
 }
 
-/// In-memory [`BackingStore`] for tests: a flat ciphertext buffer plus the wipe-marker flag.
 pub struct MemBacking {
     inner: Mutex<State>,
 }
@@ -53,7 +36,6 @@ struct State {
 }
 
 impl MemBacking {
-    /// A zeroed container of `sectors` sectors.
     pub fn zeroed(sectors: usize) -> Self {
         Self {
             inner: Mutex::new(State {
@@ -63,7 +45,6 @@ impl MemBacking {
         }
     }
 
-    /// Snapshot the raw on-disk bytes — for "thief with the raw disk" / post-shred assertions.
     pub fn raw(&self) -> Vec<u8> {
         self.inner
             .lock()

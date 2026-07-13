@@ -1,12 +1,5 @@
-//! An in-memory [`Tunnel`](crate::Tunnel) test double.
-//!
-//! This is **not cryptography** — it is a trivially reversible transform standing in for a real
-//! WireGuard session, so the routing/round-trip plumbing can be exercised without boringtun, a
-//! gateway, or a TUN device. Two endpoints created with the same key interoperate.
-
 use crate::{Inbound, Tunnel, TunnelOut};
 
-/// XOR-with-key pseudo-tunnel. `encapsulate` masks the packet; `decapsulate` reverses it.
 pub struct LoopbackTunnel {
     key: u8,
 }
@@ -29,7 +22,6 @@ impl Tunnel for LoopbackTunnel {
         if datagram.is_empty() {
             return Inbound::Idle;
         }
-        // The loopback has no control plane — every non-empty datagram is an inner packet.
         Inbound::ToProcess(datagram.iter().map(|b| b ^ self.key).collect())
     }
 }

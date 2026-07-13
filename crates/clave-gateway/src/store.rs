@@ -1,6 +1,3 @@
-//! The [`Store`] seam: the gateway's persistent state. The production impl is Postgres via sqlx;
-//! [`MemStore`] is the in-memory double that lets the whole control plane be tested with no DB.
-
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
@@ -10,53 +7,39 @@ use serde::{Deserialize, Serialize};
 
 use crate::GatewayError;
 
-/// A registered device's stable id. 128-bit so it maps directly onto the Postgres `uuid` primary
-/// key, while [`MemStore`] can assign it sequentially. The device's Ed25519 public key is the
-/// runtime trust anchor; this id is just the gateway's handle for the row.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct DeviceId(pub u128);
 
-/// Persistent control-plane state. All authoritative identity records live here; the
-/// `membership` rows are the source of truth for the invited-only gate and SCIM suspension.
 #[async_trait]
 pub trait Store: Send + Sync {
-    /// Look up a workspace.
     async fn workspace(&self, id: WorkspaceId) -> Result<Option<Workspace>, GatewayError>;
 
-    /// Resolve an authenticated email to a stable [`UserId`], creating the user on first sight.
     async fn upsert_user(
         &self,
         email: &EmailAddr,
         idp_user_id: &str,
     ) -> Result<UserId, GatewayError>;
 
-    /// The user's membership in a workspace, if any.
     async fn membership(
         &self,
         workspace: WorkspaceId,
         user: UserId,
     ) -> Result<Option<Membership>, GatewayError>;
 
-    /// Insert or replace a membership (also used to suspend by writing a `Suspended` status).
     async fn put_membership(&self, membership: &Membership) -> Result<(), GatewayError>;
 
-    /// A pending invitation addressed to `email` for `workspace`, if any.
     async fn invitation(
         &self,
         workspace: WorkspaceId,
         email: &EmailAddr,
     ) -> Result<Option<Invitation>, GatewayError>;
 
-    /// Mark an invitation accepted so it cannot be reused.
     async fn mark_invitation_accepted(
         &self,
         workspace: WorkspaceId,
         email: &EmailAddr,
     ) -> Result<(), GatewayError>;
 
-    /// Register an enrolled device by its Ed25519 public key (the runtime trust anchor), recording
-    /// who enrolled it and marking it active. **Idempotent**: re-enrolling the same key in the same
-    /// workspace (e.g. a retried poll) returns the existing [`DeviceId`] rather than duplicating it.
     async fn record_device(
         &self,
         workspace: WorkspaceId,
@@ -65,8 +48,6 @@ pub trait Store: Send + Sync {
     ) -> Result<DeviceId, GatewayError>;
 }
 
-/// In-memory [`Store`] for tests/dev. Uses a plain `Mutex` per table; locks are never held across
-/// an `await`, so this is sound under any runtime.
 #[derive(Default)]
 pub struct MemStore {
     inner: Mutex<Inner>,
@@ -77,24 +58,21 @@ struct Inner {
     next_user: u64,
     next_device: u128,
     workspaces: HashMap<WorkspaceId, Workspace>,
-    users: HashMap<String, UserId>, // normalized email → id
+    users: HashMap<String, UserId>,
     memberships: HashMap<(WorkspaceId, UserId), Membership>,
-    invitations: HashMap<(WorkspaceId, String), Invitation>, // (ws, normalized email) → invite
-    devices: HashMap<(WorkspaceId, [u8; 32]), DeviceId>,     // (ws, pubkey) → id
+    invitations: HashMap<(WorkspaceId, String), Invitation>,
+    devices: HashMap<(WorkspaceId, [u8; 32]), DeviceId>,
 }
 
 impl MemStore {
-    /// An empty store.
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// Seed a workspace (test/dev helper).
     pub fn seed_workspace(&self, ws: Workspace) {
         self.inner.lock().unwrap().workspaces.insert(ws.id, ws);
     }
 
-    /// Seed a membership (test/dev helper).
     pub fn seed_membership(&self, m: Membership) {
         self.inner
             .lock()
@@ -103,7 +81,6 @@ impl MemStore {
             .insert((m.workspace, m.user), m);
     }
 
-    /// Seed an invitation (test/dev helper).
     pub fn seed_invitation(&self, inv: Invitation) {
         let key = (inv.workspace, inv.email.as_str().to_string());
         self.inner.lock().unwrap().invitations.insert(key, inv);
@@ -194,7 +171,7 @@ impl Store for MemStore {
         let mut inner = self.inner.lock().unwrap();
         let key = (workspace, *device_pubkey);
         if let Some(id) = inner.devices.get(&key) {
-            return Ok(*id); // idempotent re-enrollment
+            return Ok(*id);
         }
         inner.next_device += 1;
         let id = DeviceId(inner.next_device);
@@ -203,9 +180,6 @@ impl Store for MemStore {
     }
 }
 
-/// Delegating impl so a shared `Arc<MemStore>` (or `Arc<dyn Store>`) is itself a [`Store`] — how
-/// the Axum app shares one pool across handlers, and how tests hold a handle to the store after
-/// the gateway owns its clone.
 #[async_trait]
 impl<T: Store + ?Sized> Store for Arc<T> {
     async fn workspace(&self, id: WorkspaceId) -> Result<Option<Workspace>, GatewayError> {
@@ -248,6 +222,8 @@ impl<T: Store + ?Sized> Store for Arc<T> {
         enrolled_by: UserId,
         device_pubkey: &[u8; 32],
     ) -> Result<DeviceId, GatewayError> {
-        (**self).record_device(workspace, enrolled_by, device_pubkey).await
+        (**self)
+            .record_device(workspace, enrolled_by, device_pubkey)
+            .await
     }
 }

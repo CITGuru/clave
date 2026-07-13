@@ -1,29 +1,16 @@
-//! The AES-256-XTS block layer — the volume's data plane.
-//!
-//! XTS is the standard for whole-volume encryption: each **sector** (data unit) is encrypted
-//! independently with the **tweak set to its sector index**, so identical plaintext in two
-//! sectors yields different ciphertext and sectors decrypt in any order. XTS is length-
-//! preserving and *unauthenticated*: integrity for full-disk encryption comes from the runtime
-//! access gate and the hardware-bound key, not a per-sector MAC (this is by design for FDE).
-
 use aes::cipher::KeyInit;
 use aes::Aes256;
 use xts_mode::{get_tweak_default, Xts128};
 
 use crate::keys::Dek;
 
-/// Sector (data-unit) size. Matched to a 4 KiB filesystem cluster so a write touches one sector
-/// and avoids read-modify-write amplification.
 pub const SECTOR_SIZE: usize = 4096;
 
-/// An AES-256-XTS cipher bound to a volume [`Dek`]. Holds the expanded AES round keys; with the
-/// `aes` crate's `zeroize` feature they are wiped when the cipher is dropped on lock/wipe.
 pub struct XtsCipher {
     xts: Xts128<Aes256>,
 }
 
 impl XtsCipher {
-    /// Build the cipher from the 64-byte DEK (two AES-256 keys: data unit + tweak).
     pub fn new(dek: &Dek) -> Self {
         let data = Aes256::new_from_slice(dek.data_key()).expect("32-byte XTS data key");
         let tweak = Aes256::new_from_slice(dek.tweak_key()).expect("32-byte XTS tweak key");
@@ -32,14 +19,11 @@ impl XtsCipher {
         }
     }
 
-    /// Encrypt `buf` in place. `buf` must be a whole number of [`SECTOR_SIZE`] sectors;
-    /// `first_sector` is the absolute sector index of `buf[0]` and becomes the XTS tweak.
     pub fn encrypt(&self, buf: &mut [u8], first_sector: u64) {
         self.xts
             .encrypt_area(buf, SECTOR_SIZE, first_sector as u128, get_tweak_default);
     }
 
-    /// Inverse of [`XtsCipher::encrypt`]; `first_sector` must match the value used to encrypt.
     pub fn decrypt(&self, buf: &mut [u8], first_sector: u64) {
         self.xts
             .decrypt_area(buf, SECTOR_SIZE, first_sector as u128, get_tweak_default);
@@ -82,7 +66,6 @@ mod tests {
 
     #[test]
     fn identical_plaintext_differs_per_sector() {
-        // Tweak = sector index, so the same plaintext encrypts differently in each sector.
         let c = cipher();
         let mut two = vec![0u8; SECTOR_SIZE * 2];
         c.encrypt(&mut two, 0);
@@ -99,7 +82,7 @@ mod tests {
         let mut buf = vec![0x5Au8; SECTOR_SIZE];
         let original = buf.clone();
         c.encrypt(&mut buf, 1);
-        c.decrypt(&mut buf, 2); // wrong tweak
+        c.decrypt(&mut buf, 2);
         assert_ne!(
             buf, original,
             "decrypting at the wrong sector must not recover plaintext"

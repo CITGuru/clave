@@ -1,13 +1,3 @@
-//! Authenticated IPC transport over the message contracts.
-//!
-//! A Unix-domain-socket server + framed [`Connection`] for the daemon↔shim and daemon↔UI
-//! links. The transport is **mechanism only**: it reads the connecting peer's credentials and
-//! delegates the *policy* (code-signature check, supervised-set membership, per-launch nonce)
-//! to a [`PeerAuthenticator`] supplied by the daemon. The Windows named-pipe
-//! transport (`tokio::net::windows::named_pipe`) is the analogous future scaffold.
-//!
-//! Available on Unix; gated out elsewhere.
-
 use crate::{
     encode, try_decode, DaemonMsg, FrameError, LauncherReply, LauncherRequest, ShimMsg,
     PROTO_VERSION,
@@ -18,14 +8,11 @@ use std::path::Path;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{UnixListener, UnixStream};
 
-/// Transport-layer errors.
 #[derive(Debug)]
 pub enum TransportError {
     Io(std::io::Error),
     Frame(FrameError),
-    /// The handshake failed (bad version, rejected peer, or unexpected message).
     Handshake(&'static str),
-    /// The peer closed the connection in the middle of a frame.
     Truncated,
 }
 
@@ -52,32 +39,22 @@ impl From<FrameError> for TransportError {
     }
 }
 
-/// Credentials of the connected peer (from `SO_PEERCRED` / `LOCAL_PEERCRED`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PeerCred {
     pub uid: u32,
     pub pid: Option<i32>,
 }
 
-/// Admits or rejects a peer after the handshake.
-///
-/// The production implementation (in the daemon) verifies the peer's code signature
-/// (`SecCodeCheckValidity`), confirms its pid/audit-token is in the supervised set, and matches
-/// the per-launch nonce handed to the shim at injection time. Keeping it a trait
-/// means the transport never bakes in policy.
 pub trait PeerAuthenticator: Send + Sync {
     fn authenticate(&self, cred: &PeerCred, nonce: u64) -> bool;
 }
 
-/// A framed message connection over a Unix stream. Symmetric: either side can read/write any
-/// message type (the daemon reads [`ShimMsg`]/writes [`DaemonMsg`]; the shim does the reverse).
 pub struct Connection {
     stream: UnixStream,
     buf: Vec<u8>,
 }
 
 impl Connection {
-    /// Connect to a listening [`IpcServer`] (client side).
     pub async fn connect(path: impl AsRef<Path>) -> Result<Self, TransportError> {
         Ok(Self {
             stream: UnixStream::connect(path).await?,
@@ -92,7 +69,6 @@ impl Connection {
         }
     }
 
-    /// Read the connecting peer's credentials (the basis for authentication).
     pub fn peer_cred(&self) -> Result<PeerCred, TransportError> {
         let c = self.stream.peer_cred()?;
         Ok(PeerCred {
@@ -101,7 +77,6 @@ impl Connection {
         })
     }
 
-    /// Write one framed message.
     pub async fn write<T: Serialize>(&mut self, msg: &T) -> Result<(), TransportError> {
         let bytes = encode(msg);
         self.stream.write_all(&bytes).await?;
@@ -109,7 +84,6 @@ impl Connection {
         Ok(())
     }
 
-    /// Read one framed message, or `None` on a clean EOF at a frame boundary.
     pub async fn read<T: DeserializeOwned>(&mut self) -> Result<Option<T>, TransportError> {
         loop {
             if let Some((msg, consumed)) = try_decode::<T>(&self.buf)? {
@@ -130,14 +104,11 @@ impl Connection {
     }
 }
 
-/// A listening IPC endpoint over a Unix-domain socket.
 pub struct IpcServer {
     listener: UnixListener,
 }
 
 impl IpcServer {
-    /// Bind to `path`, removing any stale socket file first. Restrict the socket's permissions
-    /// at the directory level in production.
     pub fn bind(path: impl AsRef<Path>) -> Result<Self, TransportError> {
         let _ = std::fs::remove_file(path.as_ref());
         Ok(Self {
@@ -151,8 +122,6 @@ impl IpcServer {
     }
 }
 
-/// Server side of the handshake: read [`ShimMsg::Hello`], check the protocol version and the
-/// [`PeerAuthenticator`], then reply [`DaemonMsg::Welcome`].
 pub async fn server_handshake(
     conn: &mut Connection,
     auth: &dyn PeerAuthenticator,
@@ -177,7 +146,6 @@ pub async fn server_handshake(
     }
 }
 
-/// Client side of the handshake: send [`ShimMsg::Hello`], expect [`DaemonMsg::Welcome`].
 pub async fn client_handshake(conn: &mut Connection, nonce: u64) -> Result<(), TransportError> {
     conn.write(&ShimMsg::Hello {
         proto: PROTO_VERSION,
@@ -191,8 +159,6 @@ pub async fn client_handshake(conn: &mut Connection, nonce: u64) -> Result<(), T
     }
 }
 
-/// Serve requests until the peer closes: read each [`ShimMsg`], map it via `handler`, and write
-/// any [`DaemonMsg`] reply. The daemon passes a handler that calls into its policy brain.
 pub async fn serve<F>(mut conn: Connection, mut handler: F) -> Result<(), TransportError>
 where
     F: FnMut(ShimMsg) -> Option<DaemonMsg>,
@@ -205,12 +171,6 @@ where
     Ok(())
 }
 
-// The daemon↔launcher-UI link.
-
-/// Serve the **launcher UI** over a connection: complete the [`LauncherRequest::Hello`] handshake,
-/// then answer each request via `handler` until the UI disconnects. The daemon passes a handler
-/// that calls `Daemon::handle_launcher_request` (catalog / launch spec / posture). Every request
-/// gets exactly one reply — unlike the shim link, which fires-and-forgets some messages.
 pub async fn serve_launcher<F>(mut conn: Connection, mut handler: F) -> Result<(), TransportError>
 where
     F: FnMut(LauncherRequest) -> LauncherReply,
@@ -235,15 +195,11 @@ where
     Ok(())
 }
 
-/// Client handle for the launcher UI (the Tauri backend): connects, handshakes, then issues typed
-/// request/reply round-trips. Each call writes one [`LauncherRequest`] and awaits its
-/// [`LauncherReply`], so it is **not** safe to share across tasks without external serialization.
 pub struct LauncherClient {
     conn: Connection,
 }
 
 impl LauncherClient {
-    /// Connect to the daemon's launcher socket and complete the version handshake.
     pub async fn connect(path: impl AsRef<Path>) -> Result<Self, TransportError> {
         let mut conn = Connection::connect(path).await?;
         conn.write(&LauncherRequest::Hello {
@@ -260,7 +216,6 @@ impl LauncherClient {
         }
     }
 
-    /// The launch catalog (allow-listed work apps with an executable).
     pub async fn list_apps(&mut self) -> Result<Vec<LaunchableApp>, TransportError> {
         self.conn.write(&LauncherRequest::ListApps).await?;
         match self.conn.read::<LauncherReply>().await? {
@@ -270,7 +225,6 @@ impl LauncherClient {
         }
     }
 
-    /// Resolve the contained spawn spec for one app (`None` if unknown / volume not mounted).
     pub async fn prepare_launch(
         &mut self,
         app_id: AppId,
@@ -285,13 +239,8 @@ impl LauncherClient {
         }
     }
 
-    /// Spawn one app contained and seed it into the supervised zone set. Returns the spawned pid,
-    /// or `None` if the daemon refused the launch (unknown / not launchable / disk unmounted) or the
-    /// spawn failed.
     pub async fn launch(&mut self, app_id: AppId) -> Result<Option<u32>, TransportError> {
-        self.conn
-            .write(&LauncherRequest::Launch { app_id })
-            .await?;
+        self.conn.write(&LauncherRequest::Launch { app_id }).await?;
         match self.conn.read::<LauncherReply>().await? {
             Some(LauncherReply::Launched { pid }) => Ok(pid),
             Some(_) => Err(TransportError::Handshake("expected Launched")),
@@ -299,7 +248,6 @@ impl LauncherClient {
         }
     }
 
-    /// This OS adapter's enforcement posture as `capability → status` pairs.
     pub async fn enforcement(&mut self) -> Result<Vec<(String, String)>, TransportError> {
         self.conn.write(&LauncherRequest::Enforcement).await?;
         match self.conn.read::<LauncherReply>().await? {

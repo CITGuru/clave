@@ -1,5 +1,3 @@
-//! End-to-end transport tests over a real Unix-domain socket: handshake, peer auth, a request/
-//! reply round-trip, and rejection paths. Unix-only.
 #![cfg(unix)]
 
 use clave_core::{Action, Reason, Verdict};
@@ -38,7 +36,6 @@ async fn handshake_and_decision_round_trip() {
     let server_task = tokio::spawn(async move {
         let mut conn = server.accept().await.unwrap();
         let cred = server_handshake(&mut conn, &AllowAll).await.unwrap();
-        // We connected from this same process, so the peer pid should be visible.
         assert!(cred.pid.is_some() || cred.uid == cred.uid);
         serve(conn, |msg| match msg {
             ShimMsg::RequestDecision { req_id, .. } => Some(DaemonMsg::Decision {
@@ -75,7 +72,7 @@ async fn handshake_and_decision_round_trip() {
         other => panic!("unexpected reply: {other:?}"),
     }
 
-    drop(client); // EOF → server's serve loop returns
+    drop(client);
     server_task.await.unwrap();
     let _ = std::fs::remove_file(&path);
 }
@@ -92,7 +89,6 @@ async fn rejected_peer_fails_handshake() {
     });
 
     let mut client = Connection::connect(&path).await.unwrap();
-    // The server reads Hello, rejects, and drops without sending Welcome → client read errors.
     let res = client_handshake(&mut client, 1).await;
     assert!(res.is_err());
 

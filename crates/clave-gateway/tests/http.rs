@@ -1,6 +1,3 @@
-//! HTTP-layer tests driven through `tower::oneshot` over the in-memory seams — no server socket,
-//! no Postgres, no network. Exercises the sealed-cookie round-trip and the status-code mapping.
-
 use std::sync::Arc;
 
 use axum::body::{to_bytes, Body};
@@ -10,7 +7,7 @@ use clave_gateway::{
     Membership, MembershipStatus, MockIdentityProvider, Role, SessionSealer, Store, VerifiedUser,
     Workspace, WorkspaceId,
 };
-use tower::ServiceExt; // for `oneshot`
+use tower::ServiceExt;
 
 const WS: u64 = 100;
 
@@ -29,7 +26,6 @@ fn verified(email: &str, method: AuthMethod) -> VerifiedUser {
     }
 }
 
-/// Build (router, store-handle) wired to a mock IdP authenticating as `user`.
 fn app(user: VerifiedUser) -> (axum::Router, Arc<MemStore>) {
     let mem = Arc::new(MemStore::new());
     mem.seed_workspace(Workspace {
@@ -37,7 +33,8 @@ fn app(user: VerifiedUser) -> (axum::Router, Arc<MemStore>) {
         allowed_domains: vec![],
         sso: clave_gateway::SsoMode::Optional,
     });
-    let idp: Arc<dyn IdentityProvider> = Arc::new(MockIdentityProvider::new(user, "approved-device"));
+    let idp: Arc<dyn IdentityProvider> =
+        Arc::new(MockIdentityProvider::new(user, "approved-device"));
     let store: Arc<dyn Store> = mem.clone();
     let gw: DynGateway = Gateway::new(idp, store);
     let state = AppState::new(Arc::new(gw), SessionSealer::new([7u8; 32]));
@@ -72,7 +69,6 @@ async fn login_sets_a_sealed_cookie_and_me_round_trips() {
     let (router, store) = app(verified("ceo@acme.com", AuthMethod::Password));
     store.seed_membership(active(1, Role::Admin));
 
-    // Login.
     let resp = router
         .clone()
         .oneshot(post_json("/auth/console/callback", r#"{"code":"abc"}"#))
@@ -88,10 +84,8 @@ async fn login_sets_a_sealed_cookie_and_me_round_trips() {
         .to_string();
     assert!(set_cookie.contains("HttpOnly"));
     assert!(set_cookie.contains("Secure"));
-    // The cookie pair (everything before the first `;`) is a valid Cookie request header.
     let cookie_pair = set_cookie.split(';').next().unwrap().to_string();
 
-    // /auth/me with the cookie resolves the identity.
     let resp = router
         .clone()
         .oneshot(
@@ -114,7 +108,12 @@ async fn me_without_a_cookie_is_unauthorized() {
     store.seed_membership(active(1, Role::Admin));
 
     let resp = router
-        .oneshot(Request::builder().uri("/auth/me").body(Body::empty()).unwrap())
+        .oneshot(
+            Request::builder()
+                .uri("/auth/me")
+                .body(Body::empty())
+                .unwrap(),
+        )
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
@@ -152,7 +151,6 @@ async fn suspension_forbids_the_next_request_with_the_same_cookie() {
         .unwrap()
         .to_string();
 
-    // SCIM suspends the member; the same cookie is now rejected.
     store.seed_membership(Membership {
         status: MembershipStatus::Suspended,
         ..active(1, Role::Admin)
@@ -175,17 +173,18 @@ async fn enrollment_endpoints_work_end_to_end() {
     let (router, store) = app(verified("dev@acme.com", AuthMethod::Sso { verified: true }));
     store.seed_membership(active(1, Role::Member));
 
-    // Start: returns the device-code grant.
     let resp = router
         .clone()
-        .oneshot(post_json("/enroll/start", &format!("{{\"workspace\":{WS}}}")))
+        .oneshot(post_json(
+            "/enroll/start",
+            &format!("{{\"workspace\":{WS}}}"),
+        ))
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
     let body = body_string(resp).await;
     assert!(body.contains("approved-device"), "body was {body}");
 
-    // Poll with the approved code: enrollment is authorized.
     let resp = router
         .oneshot(post_json(
             "/enroll/poll",
@@ -202,7 +201,7 @@ async fn enrollment_endpoints_work_end_to_end() {
 async fn completing_enrollment_over_http_registers_the_device() {
     let (router, store) = app(verified("dev@acme.com", AuthMethod::Sso { verified: true }));
     store.seed_membership(active(1, Role::Member));
-    let pubkey_hex = "aa".repeat(32); // 64 hex chars = 32 bytes
+    let pubkey_hex = "aa".repeat(32);
 
     let resp = router
         .clone()
@@ -217,7 +216,10 @@ async fn completing_enrollment_over_http_registers_the_device() {
     assert_eq!(resp.status(), StatusCode::OK);
     let body = body_string(resp).await;
     assert!(body.contains("\"status\":\"approved\""), "body was {body}");
-    assert!(body.contains("\"device\":"), "grant must carry a device id; body was {body}");
+    assert!(
+        body.contains("\"device\":"),
+        "grant must carry a device id; body was {body}"
+    );
 }
 
 #[tokio::test]

@@ -1,5 +1,3 @@
-//! Codec round-trips, partial/oversized/garbage handling, and panic-freedom on hostile input.
-
 use clave_core::{Action, Reason, Verdict};
 use clave_ipc::{encode, try_decode, DaemonMsg, FrameError, ShimMsg, MAX_FRAME, PROTO_VERSION};
 use clave_platform::{ClipFormat, WindowId, Zone};
@@ -53,14 +51,11 @@ fn incomplete_frames_return_none() {
     let bytes = encode(&ShimMsg::WindowCreated {
         window: WindowId(1),
     });
-    // Drop the final body byte → not enough bytes yet.
     assert_eq!(
         try_decode::<ShimMsg>(&bytes[..bytes.len() - 1]).unwrap(),
         None
     );
-    // Only a partial length prefix.
     assert_eq!(try_decode::<ShimMsg>(&[0, 0]).unwrap(), None);
-    // Empty.
     assert_eq!(try_decode::<ShimMsg>(&[]).unwrap(), None);
 }
 
@@ -73,10 +68,8 @@ fn oversized_length_prefix_is_rejected() {
 
 #[test]
 fn garbage_body_is_malformed_not_panic() {
-    // Valid length prefix (8), but the body is not a valid ShimMsg encoding.
     let mut buf = 8u32.to_le_bytes().to_vec();
     buf.extend_from_slice(&[0xFF; 8]);
-    // Either Malformed, or (vanishingly unlikely) a valid decode — never a panic.
     let _ = try_decode::<ShimMsg>(&buf);
 }
 
@@ -103,15 +96,12 @@ fn two_frames_decode_sequentially() {
 }
 
 proptest! {
-    /// The decoder must never panic on arbitrary bytes (it parses untrusted shim input).
     #[test]
     fn prop_decode_never_panics(bytes in prop::collection::vec(any::<u8>(), 0..4096)) {
         let _ = try_decode::<ShimMsg>(&bytes);
         let _ = try_decode::<DaemonMsg>(&bytes);
     }
 
-    /// A well-formed frame wrapping a random body is always either decoded or cleanly
-    /// `Malformed` — never `TooLarge` (the body is small) and never a panic.
     #[test]
     fn prop_random_body_is_decoded_or_malformed(body in prop::collection::vec(any::<u8>(), 0..1024)) {
         let mut buf = (body.len() as u32).to_le_bytes().to_vec();
@@ -122,7 +112,6 @@ proptest! {
         }
     }
 
-    /// Round-trip property: any encodable decision request survives encode→decode intact.
     #[test]
     fn prop_request_decision_round_trips(req_id in any::<u64>(), n in any::<u32>()) {
         let m = ShimMsg::RequestDecision {

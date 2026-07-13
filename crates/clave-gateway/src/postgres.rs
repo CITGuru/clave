@@ -1,9 +1,3 @@
-//! Postgres-backed [`Store`] (sqlx). Compiled only with the `postgres` feature.
-//!
-//! Uses sqlx's **runtime** query API (`sqlx::query` + `Row::try_get`), not the compile-time-checked
-//! `query!` macros, so the crate builds with no `DATABASE_URL` and no live database. Enum columns
-//! are plain text; emails are stored normalized (see [`clave_identity::EmailAddr`]).
-
 use async_trait::async_trait;
 use clave_identity::{
     EmailAddr, Invitation, Membership, MembershipStatus, Role, SsoMode, UserId, Workspace,
@@ -14,7 +8,6 @@ use sqlx::{PgPool, Row};
 
 use crate::{DeviceId, GatewayError, Store};
 
-/// A [`Store`] over a Postgres connection pool.
 pub struct PgStore {
     pool: PgPool,
 }
@@ -71,12 +64,10 @@ fn sso_to(s: SsoMode) -> &'static str {
 }
 
 impl PgStore {
-    /// Wrap an existing pool.
     pub fn new(pool: PgPool) -> Self {
         Self { pool }
     }
 
-    /// Open a pool against `url` (e.g. `postgres://user:pass@host/db`).
     pub async fn connect(url: &str) -> Result<Self, GatewayError> {
         let pool = PgPoolOptions::new()
             .max_connections(8)
@@ -86,7 +77,6 @@ impl PgStore {
         Ok(Self { pool })
     }
 
-    /// Apply the embedded migrations (the `migrations/` directory, baked in at compile time).
     pub async fn migrate(&self) -> Result<(), GatewayError> {
         sqlx::migrate!("./migrations")
             .run(&self.pool)
@@ -94,8 +84,6 @@ impl PgStore {
             .map_err(store_err)
     }
 
-    /// Insert or update a workspace. Workspace provisioning is normally out-of-band (SCIM / the
-    /// admin console), but the single-tenant bootstrap and integration tests need a writer.
     pub async fn upsert_workspace(&self, ws: &Workspace) -> Result<(), GatewayError> {
         sqlx::query(
             "INSERT INTO workspace (id, allowed_domains, sso_mode) VALUES ($1, $2, $3) \
@@ -111,8 +99,6 @@ impl PgStore {
         Ok(())
     }
 
-    /// Insert or update a pending invitation (the admin-console "invite a teammate" action; also a
-    /// test writer). Read back by [`Store::invitation`] and consumed by `mark_invitation_accepted`.
     pub async fn upsert_invitation(&self, inv: &Invitation) -> Result<(), GatewayError> {
         sqlx::query(
             "INSERT INTO invitation (workspace_id, email, role, expires_at, accepted) \
@@ -267,8 +253,6 @@ impl Store for PgStore {
         enrolled_by: UserId,
         device_pubkey: &[u8; 32],
     ) -> Result<DeviceId, GatewayError> {
-        // Insert a fresh row; on a repeat (workspace, key) keep the existing id and re-arm `active`,
-        // so a retried enrollment poll is idempotent. `RETURNING id` yields the surviving uuid.
         let new_id = uuid::Uuid::new_v4();
         let row = sqlx::query(
             "INSERT INTO device (id, workspace_id, enrolled_by, device_pubkey, status) \

@@ -1,8 +1,3 @@
-//! Manual smoke check: connect to a running `clave-daemon` as the launcher UI would and print the
-//! catalog, one launch spec, and the enforcement posture. Run with `CLAVE_LAUNCHER_SOCK` set.
-//!
-//! `cargo run -p clave-ipc --example launcher_smoke`
-
 use clave_core::AppId;
 use clave_ipc::transport::LauncherClient;
 
@@ -41,13 +36,8 @@ async fn main() {
         println!("  {cap}: {status}");
     }
 
-    // Opt-in: actually spawn a work app (pops a real window). Set CLAVE_SMOKE_LAUNCH to an app id,
-    // e.g. `CLAVE_SMOKE_LAUNCH=calculator-work`.
     if let Ok(app_id) = std::env::var("CLAVE_SMOKE_LAUNCH") {
-        let pid = client
-            .launch(AppId(app_id.clone()))
-            .await
-            .expect("launch");
+        let pid = client.launch(AppId(app_id.clone())).await.expect("launch");
         println!("launched {app_id}: pid {pid:?}");
     }
 }

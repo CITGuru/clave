@@ -1,10 +1,3 @@
-//! The hardware-root key-store seam + an in-memory double.
-//!
-//! In production a TPM 2.0 (Windows) or the Secure Enclave (macOS) holds the [`Kek`] and
-//! performs the unwrap *inside the secure element*, so the KEK never leaves hardware. This trait
-//! is how the portable core asks for the DEK and requests crypto-shred; [`MemKeyStore`] models
-//! it for tests by holding the KEK in zeroizing memory and running AES-KW in software.
-
 use std::collections::HashMap;
 use std::sync::Mutex;
 
@@ -12,25 +5,14 @@ use crate::container::ContainerId;
 use crate::keys::{Dek, Kek, WrappedDek};
 use crate::VolumeError;
 
-/// A per-device, hardware-bound key store. For each container it holds the wrapped DEK; only it
-/// can unwrap. **Crypto-shred** ([`KeyStore::destroy`]) is the O(1), irreversible remote-wipe
-/// primitive: destroying the wrapped DEK renders the container unrecoverable.
 pub trait KeyStore: Send + Sync {
-    /// Unwrap this container's DEK into zeroizing memory. Fails closed
-    /// ([`VolumeError::KeyDestroyed`]) if the wrapped key was shredded or never provisioned.
     fn unwrap_dek(&self, container: ContainerId) -> Result<Dek, VolumeError>;
 
-    /// Whether a (non-shredded) wrapped DEK exists for `container`.
     fn contains(&self, container: ContainerId) -> bool;
 
-    /// Crypto-shred: irreversibly destroy the wrapped DEK. Idempotent — destroying an
-    /// already-gone key still leaves the goal state (unrecoverable), so it returns `Ok` (this
-    /// models an offline device whose key was already destroyed before it came back).
     fn destroy(&self, container: ContainerId) -> Result<(), VolumeError>;
 }
 
-/// In-memory [`KeyStore`] for tests. Holds, per container, the hardware-bound [`Kek`] (here in
-/// zeroizing RAM instead of a TPM / Secure Enclave) and the [`WrappedDek`].
 #[derive(Default)]
 pub struct MemKeyStore {
     inner: Mutex<HashMap<ContainerId, Entry>>,
@@ -46,8 +28,6 @@ impl MemKeyStore {
         Self::default()
     }
 
-    /// Provision a container: store `wrap(kek, dek)` and the (modelled hardware-bound) KEK. The
-    /// caller's `dek` handle is borrowed and may be dropped (zeroized) afterward.
     pub fn provision(&self, container: ContainerId, kek: Kek, dek: &Dek) {
         let wrapped = kek.wrap(dek);
         self.inner
@@ -72,7 +52,6 @@ impl KeyStore for MemKeyStore {
     }
 
     fn destroy(&self, container: ContainerId) -> Result<(), VolumeError> {
-        // Dropping the Entry zeroizes the KEK; without it the WrappedDek is unrecoverable.
         self.inner
             .lock()
             .expect("keystore lock poisoned")
@@ -115,8 +94,6 @@ mod tests {
 
     #[test]
     fn destroy_is_idempotent() {
-        // Destroying a never-provisioned (or already-shredded) container is still Ok — the goal
-        // state (unrecoverable) holds.
         let ks = MemKeyStore::new();
         assert!(ks.destroy(ContainerId(1)).is_ok());
     }

@@ -1,12 +1,3 @@
-//! # clave-testkit
-//!
-//! An in-memory [`Platform`] implementation plus a recording [`AuditSink`], so the daemon and
-//! the policy brain can be integration-tested on any machine with **no** driver, entitlement,
-//! or signing. Every mock shares its state behind `Arc<Mutex<…>>` and is `Clone`, so a test
-//! can keep a handle to assert on after the platform is moved into the daemon.
-//!
-//! Mirrors the seam and the `MockPlatform` mentioned
-//! throughout the subsystem docs.
 #![forbid(unsafe_code)]
 
 use std::collections::HashSet;
@@ -18,8 +9,6 @@ use clave_platform::{
     NetworkTunnel, PResult, Platform, ProcId, ProcessSupervisor, Rgba, Route, ScreenGuard,
     VolumeMount, WindowId, WindowOverlay, Zone,
 };
-
-// Encrypted volume
 
 #[derive(Clone)]
 pub struct MockVolume {
@@ -42,7 +31,6 @@ impl MockVolume {
             })),
         }
     }
-    /// How many times `request_wipe` has been called (for asserting the wipe path fired).
     pub fn wipe_count(&self) -> usize {
         self.inner.lock().unwrap().wipes
     }
@@ -63,8 +51,6 @@ impl VolumeMount for MockVolume {
         Ok(())
     }
 }
-
-// Clipboard — behaves like the real broker by consulting the policy
 
 #[derive(Clone)]
 pub struct MockClipboard {
@@ -90,8 +76,6 @@ impl ClipboardBroker for MockClipboard {
         clip_decision(src, dst, fmt, &self.policy.lock().unwrap())
     }
 }
-
-// Network split-tunnel — uses the shared classifier
 
 #[derive(Clone)]
 pub struct MockNetwork {
@@ -119,8 +103,6 @@ impl NetworkTunnel for MockNetwork {
     }
 }
 
-// Screen capture
-
 #[derive(Clone, Default)]
 pub struct MockScreen {
     protected: Arc<Mutex<Vec<WindowId>>>,
@@ -138,8 +120,6 @@ impl ScreenGuard for MockScreen {
         Ok(())
     }
 }
-
-// Clave Edge overlay
 
 #[derive(Clone, Default)]
 pub struct MockOverlay {
@@ -166,8 +146,6 @@ impl WindowOverlay for MockOverlay {
     }
 }
 
-// Input isolation
-
 #[derive(Clone)]
 pub struct MockInput {
     enabled: bool,
@@ -179,13 +157,9 @@ impl InputGuard for MockInput {
     }
 }
 
-/// In-memory platform. Construct, grab handles to the mocks you want to assert on, then move
-/// it into the daemon as a `Box<dyn Platform>`.
 #[derive(Clone)]
 pub struct MockPlatform {
-    /// Shared with the daemon and the network mock — the zone-membership mirror.
     pub zones: Arc<ZoneRegistry>,
-    /// Shared with the clipboard mock; update it to change cross-zone behaviour mid-test.
     pub policy: Arc<Mutex<PolicyBundle>>,
     pub volume: MockVolume,
     pub clipboard: MockClipboard,
@@ -193,9 +167,6 @@ pub struct MockPlatform {
     pub screen: MockScreen,
     pub overlay: MockOverlay,
     pub input: MockInput,
-    /// Per-capability enforcement posture surfaced via [`Platform::enforcement`]. A mock is a
-    /// development stand-in, so every capability defaults to `DevelopmentOnly`; flip entries with
-    /// [`MockPlatform::set_enforcement`] to exercise the production gate.
     pub enforcement: Arc<Mutex<[(Capability, EnforcementStatus); Capability::COUNT]>>,
 }
 
@@ -218,7 +189,6 @@ impl MockPlatform {
         }
     }
 
-    /// Override one capability's reported posture (default `DevelopmentOnly`).
     pub fn set_enforcement(&self, cap: Capability, status: EnforcementStatus) {
         for e in self.enforcement.lock().unwrap().iter_mut() {
             if e.0 == cap {
@@ -227,7 +197,6 @@ impl MockPlatform {
         }
     }
 
-    /// Mark every capability production-`Enforced` — for exercising the production-ready path.
     pub fn set_all_enforced(&self) {
         for e in self.enforcement.lock().unwrap().iter_mut() {
             e.1 = EnforcementStatus::Enforced;
@@ -275,7 +244,6 @@ impl Platform for MockPlatform {
     }
 }
 
-/// Captures emitted [`AuditEvent`]s for assertions. Clone-shares its buffer.
 #[derive(Clone, Default)]
 pub struct RecordingAuditSink {
     events: Arc<Mutex<Vec<AuditEvent>>>,

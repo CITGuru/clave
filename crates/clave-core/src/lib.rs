@@ -1,12 +1,3 @@
-//! # clave-core
-//!
-//! The portable policy brain. Pure logic, **no OS calls**, `#![forbid(unsafe_code)]`. It
-//! decides; the platform adapters enforce.
-//!
-//! * [`zone`] — the in-memory zone-membership mirror.
-//! * [`policy`] — the signed, versioned policy model and its per-subsystem sub-policies.
-//! * [`decide`] — the single, pure, fail-closed [`decide`](decide::decide) contract.
-//! * [`audit`] — the privacy-by-schema audit event (no field can hold personal data).
 #![forbid(unsafe_code)]
 
 pub mod app;

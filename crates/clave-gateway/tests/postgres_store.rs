@@ -1,17 +1,3 @@
-//! Live-Postgres integration test for [`PgStore`]: the only place the actual SQL runs (the default
-//! `cargo test` covers the orchestration over `MemStore` and never needs a database).
-//!
-//! **Skipped** unless `CLAVE_TEST_DATABASE_URL` is set, so it is inert in normal CI. To run it
-//! against the bundled compose Postgres:
-//!
-//! ```sh
-//! docker compose -f crates/clave-gateway/docker-compose.yml up -d db
-//! CLAVE_TEST_DATABASE_URL=postgres://clave:clave@localhost:5432/clave \
-//!   cargo test -p clave-gateway --features postgres --test postgres_store -- --nocapture
-//! ```
-//!
-//! Each run uses a fresh workspace id + email (derived from the wall clock) so repeated runs against
-//! a persistent database never collide.
 #![cfg(feature = "postgres")]
 
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -21,7 +7,6 @@ use clave_gateway::{
     WorkspaceId,
 };
 
-/// Connect + migrate, or `None` (and a skip note) when no test database is configured.
 async fn connect() -> Option<PgStore> {
     let url = std::env::var("CLAVE_TEST_DATABASE_URL").ok()?;
     let store = PgStore::connect(&url)
@@ -58,14 +43,30 @@ async fn pg_store_round_trips_the_whole_identity_surface() {
         })
         .await
         .unwrap();
-    let ws = store.workspace(ws_id).await.unwrap().expect("workspace exists");
+    let ws = store
+        .workspace(ws_id)
+        .await
+        .unwrap()
+        .expect("workspace exists");
     assert_eq!(ws.allowed_domains, vec!["acme.com".to_string()]);
     assert_eq!(ws.sso, SsoMode::Required);
-    assert!(store.workspace(WorkspaceId(n ^ 0xdead)).await.unwrap().is_none());
+    assert!(store
+        .workspace(WorkspaceId(n ^ 0xdead))
+        .await
+        .unwrap()
+        .is_none());
 
-    let user = store.upsert_user(&member_email, "idp_user_1").await.unwrap();
-    // upsert_user is idempotent on the email.
-    assert_eq!(store.upsert_user(&member_email, "idp_user_1").await.unwrap(), user);
+    let user = store
+        .upsert_user(&member_email, "idp_user_1")
+        .await
+        .unwrap();
+    assert_eq!(
+        store
+            .upsert_user(&member_email, "idp_user_1")
+            .await
+            .unwrap(),
+        user
+    );
     assert!(store.membership(ws_id, user).await.unwrap().is_none());
     store
         .put_membership(&Membership {
@@ -76,10 +77,13 @@ async fn pg_store_round_trips_the_whole_identity_surface() {
         })
         .await
         .unwrap();
-    let m = store.membership(ws_id, user).await.unwrap().expect("membership");
+    let m = store
+        .membership(ws_id, user)
+        .await
+        .unwrap()
+        .expect("membership");
     assert_eq!(m.role, Role::Admin);
     assert_eq!(m.status, MembershipStatus::Active);
-    // Suspend by re-writing the row.
     store
         .put_membership(&Membership {
             status: MembershipStatus::Suspended,

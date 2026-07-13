@@ -1,5 +1,3 @@
-//! Signed gateway commands: authenticity, anti-replay, freshness, fail-closed.
-
 use clave_core::PolicyBundle;
 use clave_proto::{
     ControlReason, Envelope, GatewayCommand, GatewaySigningKey, GatewayVerifier, ProtoError,
@@ -41,7 +39,7 @@ fn tampered_payload_is_rejected() {
     let mut v = verifier(&s);
     let mut signed = s.sign(1, NOW, wipe());
     let last = signed.envelope.len() - 1;
-    signed.envelope[last] ^= 0x01; // flip a byte of the signed payload
+    signed.envelope[last] ^= 0x01;
     assert_eq!(v.verify(&signed, NOW), Err(ProtoError::BadSignature));
     assert_eq!(
         v.high_water(),
@@ -63,7 +61,7 @@ fn tampered_signature_is_rejected() {
 fn command_signed_by_the_wrong_key_is_rejected() {
     let real = signer();
     let attacker = GatewaySigningKey::from_seed(TENANT, [99u8; 32]);
-    let mut v = verifier(&real); // the daemon pins the *real* tenant key
+    let mut v = verifier(&real);
     let forged = attacker.sign(1, NOW, wipe());
     assert_eq!(v.verify(&forged, NOW), Err(ProtoError::BadSignature));
 }
@@ -107,7 +105,7 @@ fn counters_must_strictly_increase() {
 #[test]
 fn stale_command_is_rejected() {
     let s = signer();
-    let mut v = verifier(&s); // default 30-day window
+    let mut v = verifier(&s);
     let way_later = NOW + 31 * 24 * 60 * 60;
     assert!(matches!(
         v.verify(&s.sign(1, NOW, wipe()), way_later),
@@ -119,7 +117,7 @@ fn stale_command_is_rejected() {
 fn future_dated_command_beyond_skew_is_rejected() {
     let s = signer();
     let mut v = verifier(&s);
-    let issued = NOW + 3600; // an hour into the "future" relative to now
+    let issued = NOW + 3600;
     assert!(matches!(
         v.verify(&s.sign(1, issued, wipe()), NOW),
         Err(ProtoError::Stale { .. })
@@ -132,7 +130,6 @@ fn freshness_window_is_configurable() {
     let mut v = GatewayVerifier::new(TENANT, s.public_key())
         .unwrap()
         .with_max_age(60);
-    // 61s old with a 60s window → stale.
     assert!(matches!(
         v.verify(&s.sign(1, NOW - 61, wipe()), NOW),
         Err(ProtoError::Stale { .. })
@@ -141,8 +138,7 @@ fn freshness_window_is_configurable() {
 
 #[test]
 fn wrong_tenant_is_rejected() {
-    let s = signer(); // signs envelopes that claim TenantId(7)
-                      // Pin the SAME key but expect a different tenant id: the signature passes, the tenant fails.
+    let s = signer();
     let mut v = GatewayVerifier::new(TenantId(8), s.public_key()).unwrap();
     let signed = s.sign_envelope(&Envelope::new(TenantId(7), 1, NOW, wipe()));
     assert_eq!(
@@ -157,7 +153,6 @@ fn wrong_tenant_is_rejected() {
 #[test]
 fn high_water_can_be_restored_for_persistence() {
     let s = signer();
-    // Simulate a restart: the daemon restores a persisted high-water mark of 100.
     let mut v = GatewayVerifier::new(TENANT, s.public_key())
         .unwrap()
         .with_high_water(100);
@@ -193,13 +188,12 @@ fn malformed_signature_length_is_rejected() {
     let s = signer();
     let mut v = verifier(&s);
     let mut signed = s.sign(1, NOW, wipe());
-    signed.signature.truncate(10); // not 64 bytes
+    signed.signature.truncate(10);
     assert_eq!(v.verify(&signed, NOW), Err(ProtoError::Malformed));
 }
 
 #[test]
 fn signed_command_survives_serialization() {
-    // The whole point: a SignedCommand is transportable. Round-trip through postcard, then verify.
     let s = signer();
     let mut v = verifier(&s);
     let signed = s.sign(1, NOW, wipe());

@@ -1,5 +1,3 @@
-//! End-to-end daemon behaviour against the in-memory `MockPlatform` — no OS required.
-
 use std::sync::{Arc, Mutex};
 
 use clave_core::{
@@ -28,10 +26,6 @@ fn pid(n: u32) -> ProcId {
     ProcId::windows(n, 1)
 }
 
-/// Test handles: the volume's in-memory backends, the gateway signing key, and the daemon's audit
-/// spool. Lets a test mint signed commands, assert on the crypto-shred after a wipe (the keystore
-/// no longer holds the wrapped DEK, and the backing carries the wipe marker), and drain the
-/// tamper-evident audit chain.
 struct Kit {
     keystore: Arc<MemKeyStore>,
     backing: Arc<MemBacking>,
@@ -40,16 +34,10 @@ struct Kit {
     spool: Arc<AuditSpool>,
 }
 
-/// Build a daemon over a fresh mock, with a *provisioned* encrypted volume whose access gate is
-/// the daemon's own zone registry (one membership set governs routing and disk access) and a
-/// gateway verifier pinned to a test tenant key. Returns the daemon, a mock handle, the audit
-/// sink, and the test [`Kit`] (volume backends + the matching gateway signer).
 fn make_full() -> (Arc<Daemon>, MockPlatform, RecordingAuditSink, Kit) {
     let platform = MockPlatform::new();
-    let handle = platform.clone(); // Arc-backed: shares state with the boxed platform
+    let handle = platform.clone();
     let zones = Arc::clone(&platform.zones);
-    // The daemon's audit sink is a tamper-evident spool that also forwards to the recording sink
-    // the existing assertions read. Production drains the spool to the gateway.
     let recording = RecordingAuditSink::new();
     let spool = Arc::new(AuditSpool::with_sink(Arc::new(recording.clone())));
 
@@ -68,7 +56,6 @@ fn make_full() -> (Arc<Daemon>, MockPlatform, RecordingAuditSink, Kit) {
         zones.clone(),
     );
 
-    // The gateway's signing key; the daemon pins only its public half (signature pinning).
     let signer = GatewaySigningKey::from_seed(TenantId(1), [0x6A; 32]);
     let gateway = GatewayVerifier::new(TenantId(1), signer.public_key()).unwrap();
 
@@ -95,7 +82,6 @@ fn make_full() -> (Arc<Daemon>, MockPlatform, RecordingAuditSink, Kit) {
     )
 }
 
-/// The common case: most tests don't need the volume backends.
 fn make() -> (Arc<Daemon>, MockPlatform, RecordingAuditSink) {
     let (daemon, handle, audit, _vol) = make_full();
     (daemon, handle, audit)
@@ -115,12 +101,10 @@ fn work_window_is_tracked_by_clave_edge_and_screen_protected() {
 #[test]
 fn clave_edge_appearance_follows_policy_live() {
     let (daemon, _h, _audit) = make();
-    // Default policy → the calm-blue Clave Edge, 3pt.
     let cfg = daemon.overlay_cfg();
     assert_eq!(cfg.color, Rgba::CLAVE_EDGE);
     assert_eq!(cfg.thickness, 3);
 
-    // A policy update re-themes the border with no restart (the overlay reads this each frame).
     let brand = Rgba {
         r: 0xFF,
         g: 0x8C,
@@ -146,7 +130,6 @@ fn zone_membership_drives_split_tunnel() {
     let work = pid(10);
     daemon.on_zone_join(work, JoinReason::Launcher, 1);
 
-    // A supervised flow to a permitted host tunnels; a personal proc goes direct.
     assert_eq!(daemon.route_flow(&work, "good.example"), Route::Tunnel);
     assert_eq!(daemon.route_flow(&pid(99), "good.example"), Route::Direct);
 
@@ -222,14 +205,12 @@ fn wipe_invokes_volume_crypto_shred() {
 
     daemon.wipe(2).unwrap();
 
-    // The crypto-shred is authoritative: DEK evicted, wrapped key destroyed, marker set.
     assert!(!daemon.volume_is_unlocked(), "DEK evicted on wipe");
     assert!(
         !vol.keystore.contains(vol.id),
         "wrapped key crypto-shredded"
     );
     assert!(vol.backing.is_wiped(), "wipe marker set on the container");
-    // The OS adapter was also signalled to tear its mount down (best-effort).
     assert_eq!(
         h.volume.wipe_count(),
         1,
@@ -240,7 +221,6 @@ fn wipe_invokes_volume_crypto_shred() {
         .iter()
         .any(|e| e.action == AuditAction::Wiped));
 
-    // Fail-closed forever: re-unlocking the lingering container refuses on the marker.
     assert_eq!(daemon.unlock_volume(3), Err(VolumeError::WipeMarkerSet));
 }
 
@@ -276,11 +256,10 @@ fn personal_proc_is_denied_disk_access_even_when_mounted() {
     daemon.on_zone_join(work, JoinReason::Launcher, 1);
     daemon.unlock_volume(2).unwrap();
 
-    // Seed a sector as the work proc, then have an unsupervised proc try to read it.
     daemon
         .volume_write(&work, 0, &vec![0xAB; SECTOR_SIZE])
         .unwrap();
-    let personal = pid(99); // never joined the zone
+    let personal = pid(99);
     let mut got = vec![0u8; SECTOR_SIZE];
     assert_eq!(
         daemon.volume_read(&personal, 0, &mut got),
@@ -318,7 +297,6 @@ async fn volume_unlock_drives_through_the_event_loop() {
     let runner = Arc::clone(&daemon);
     let jh = tokio::spawn(async move { runner.run(rx, || 7u64).await });
 
-    // Events are processed in order, so the unlock has taken effect by the time Shutdown breaks.
     tx.send(DaemonEvent::VolumeUnlock).await.unwrap();
     tx.send(DaemonEvent::Shutdown).await.unwrap();
     jh.await.unwrap();
@@ -337,7 +315,6 @@ async fn async_event_loop_round_trips_a_decision() {
     let runner = Arc::clone(&daemon);
     let jh = tokio::spawn(async move { runner.run(rx, || 1u64).await });
 
-    // Ask for a work->personal clipboard decision; expect Deny under the restrictive default.
     let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
     tx.send(DaemonEvent::Decision {
         action: Action::ClipboardTransfer {
@@ -362,7 +339,6 @@ fn work_flow_is_pumped_through_the_tunnel() {
     let work = pid(10);
     daemon.on_zone_join(work, JoinReason::Launcher, 1);
 
-    // A supervised flow to a permitted host is tunneled; its packets are encapsulated.
     assert_eq!(
         daemon.open_flow(1, &work, "intra.corp"),
         FlowDisposition::Tunnel
@@ -373,7 +349,6 @@ fn work_flow_is_pumped_through_the_tunnel() {
         other => panic!("expected ToGateway, got {other:?}"),
     }
 
-    // A personal flow passes through untouched.
     assert_eq!(
         daemon.open_flow(2, &pid(99), "news.example"),
         FlowDisposition::Direct
@@ -383,7 +358,6 @@ fn work_flow_is_pumped_through_the_tunnel() {
         Outbound::PassThrough
     ));
 
-    // After close, the flow's packets drop.
     daemon.close_flow(1);
     assert!(matches!(daemon.flow_outbound(1, b"x"), Outbound::Dropped));
 }
@@ -464,7 +438,6 @@ async fn daemon_serves_decisions_over_ipc() {
 async fn daemon_serves_the_launcher_over_ipc() {
     use clave_ipc::transport::{serve_launcher, IpcServer, LauncherClient};
 
-    // A daemon whose policy lists one launchable work app.
     let (daemon, _h, _a, _kit) = make_full();
     let mut pol = PolicyBundle::restrictive_default();
     pol.version = 1;
@@ -487,7 +460,6 @@ async fn daemon_serves_the_launcher_over_ipc() {
             .unwrap();
     });
 
-    // The Tauri backend's exact client path: connect + handshake, then typed round-trips.
     let mut client = LauncherClient::connect(&path).await.unwrap();
 
     let apps = client.list_apps().await.unwrap();
@@ -507,7 +479,6 @@ async fn daemon_serves_the_launcher_over_ipc() {
         .unwrap()
         .is_none());
 
-    // The posture comes straight from the OS adapter; the mock reports development-only/unavailable.
     let caps = client.enforcement().await.unwrap();
     assert!(!caps.is_empty(), "posture should list capabilities");
 
@@ -538,14 +509,11 @@ fn launch_spawns_the_process_and_seeds_supervision() {
         "the launched process joined the work zone (launcher-seeded membership)"
     );
 
-    // An unknown app is refused and spawns nothing.
     assert!(matches!(
         daemon.launch(&AppId("does-not-exist".into()), 1),
         Err(clave_daemon::LaunchError::NotLaunchable)
     ));
 }
-
-// gateway: authenticated control commands
 
 #[test]
 fn gateway_signed_wipe_crypto_shreds_the_enclave() {
@@ -582,7 +550,7 @@ fn gateway_wipe_for_a_different_container_is_refused() {
         1,
         100,
         GatewayCommand::Wipe {
-            container: 0xBADC0DE, // some other device's enclave
+            container: 0xBADC0DE,
             reason: ControlReason::AdminRequest,
         },
     );
@@ -600,7 +568,6 @@ fn gateway_wipe_for_a_different_container_is_refused() {
 fn forged_gateway_command_changes_nothing() {
     let (daemon, _h, _a, kit) = make_full();
     daemon.unlock_volume(1).unwrap();
-    // An attacker (wrong key) signs a wipe for the right container.
     let attacker = GatewaySigningKey::from_seed(TenantId(1), [0xFF; 32]);
     let forged = attacker.sign(
         1,
@@ -627,7 +594,7 @@ fn replayed_gateway_command_is_rejected() {
             reason: ControlReason::Compromise,
         },
     );
-    daemon.apply_gateway_command(&cmd, 100).unwrap(); // first delivery: applied
+    daemon.apply_gateway_command(&cmd, 100).unwrap();
     assert!(matches!(
         daemon.apply_gateway_command(&cmd, 100),
         Err(GatewayError::Rejected(ProtoError::Replay { .. }))
@@ -648,7 +615,6 @@ fn gateway_signed_policy_update_applies_and_rejects_rollback() {
         .unwrap();
     assert_eq!(daemon.policy_version(), 2);
 
-    // A later, authentic, but *older* bundle: rejected by version monotonicity.
     let mut v1 = PolicyBundle::restrictive_default();
     v1.version = 1;
     assert!(matches!(
@@ -710,10 +676,8 @@ async fn gateway_command_drives_through_the_event_loop() {
 
 #[test]
 fn daemon_audit_drains_into_a_verifiable_signed_batch() {
-    // The daemon's audit sink is an AuditSpool; the (future) sync loop drains it, the device signs
-    // the batch, and the gateway verifies the tamper-evident chain end to end.
     let (daemon, _h, _a, kit) = make_full();
-    daemon.unlock_volume(1).unwrap(); // emits VolumeMounted (seq 1)
+    daemon.unlock_volume(1).unwrap();
     let wipe = kit.signer.sign(
         1,
         100,
@@ -722,7 +686,7 @@ fn daemon_audit_drains_into_a_verifiable_signed_batch() {
             reason: ControlReason::Offboarding,
         },
     );
-    daemon.apply_gateway_command(&wipe, 100).unwrap(); // emits Wiped (seq 2)
+    daemon.apply_gateway_command(&wipe, 100).unwrap();
 
     let device = DeviceSigningKey::from_seed([0xD0; 32]);
     let (entries, head) = kit.spool.drain();
@@ -738,9 +702,6 @@ fn daemon_audit_drains_into_a_verifiable_signed_batch() {
 
 #[test]
 fn volume_handle_shares_one_instance_so_wipe_halts_the_mount() {
-    // The OS mount adapter (WinFsp/APFS) holds this same `Arc<Mutex<ClaveVolume>>` and runs its
-    // per-sector crypto through it — so there is exactly one DEK and one lock state, not a second
-    // copy that could keep serving plaintext after a wipe.
     let (daemon, _h, _audit, _vol) = make_full();
     let work = pid(10);
     daemon.on_zone_join(work, JoinReason::Launcher, 1);
@@ -752,8 +713,6 @@ fn volume_handle_shares_one_instance_so_wipe_halts_the_mount() {
         "the mount holds the same unlocked volume the daemon does"
     );
 
-    // A remote wipe via the daemon must instantly affect the SHARED instance the mount serves —
-    // the very point of the Arc seam.
     daemon.wipe(2).unwrap();
     assert!(
         !mount.lock().unwrap().is_unlocked(),
@@ -770,9 +729,8 @@ fn volume_handle_shares_one_instance_so_wipe_halts_the_mount() {
 #[test]
 fn gateway_sync_applies_pulled_commands_and_ships_signed_audit() {
     let (daemon, _h, _a, kit) = make_full();
-    daemon.unlock_volume(1).unwrap(); // VolumeMounted (seq 1)
+    daemon.unlock_volume(1).unwrap();
 
-    // The gateway pushes a signed wipe onto the link; the daemon device-signs the audit it drains.
     let link = LoopbackLink::new();
     link.enqueue_command(kit.signer.sign(
         1,
@@ -796,13 +754,11 @@ fn gateway_sync_applies_pulled_commands_and_ships_signed_audit() {
     assert_eq!(report.rejected, 0);
     assert!(!daemon.volume_is_unlocked(), "the pulled wipe was applied");
 
-    // The drained audit (VolumeMounted + Wiped) was signed, shipped, and verifies as a chain.
     let batches = link.pushed_batches();
     assert_eq!(batches.len(), 1);
     verify_batch(GENESIS, 1, &batches[0], device.public_key())
         .expect("the shipped audit batch verifies at the gateway");
 
-    // The cycle persisted the advanced posture so a restart can't rewind it.
     let saved = store.load().expect("a checkpoint was persisted");
     assert_eq!(
         saved.gateway_high_water, 1,
@@ -812,16 +768,12 @@ fn gateway_sync_applies_pulled_commands_and_ships_signed_audit() {
 
 #[test]
 fn audit_survives_a_dead_link_and_never_wedges_the_chain() {
-    // Regression (review finding): the old drain-then-ship removed entries then dropped the batch
-    // when the link was down — advancing the chain past entries the gateway never received, so
-    // every later batch failed with a permanent gap. The ack-based ship retains entries on failure
-    // and re-ships the whole tail intact once the link recovers.
     let (daemon, _h, _a, _kit) = make_full();
-    daemon.unlock_volume(1).unwrap(); // VolumeMounted (seq 1)
+    daemon.unlock_volume(1).unwrap();
 
     let device = DeviceSigningKey::from_seed([0xD0; 32]);
     let link = LoopbackLink::new();
-    link.set_online(false); // the link is DOWN
+    link.set_online(false);
     let store = MemCheckpointStore::new();
     let mut sync = GatewaySync::new(
         Box::new(link.clone()),
@@ -829,18 +781,18 @@ fn audit_survives_a_dead_link_and_never_wedges_the_chain() {
         Box::new(store.clone()),
     );
 
-    // Cycle 1: nothing ships; the entry is retained, not lost.
     let r1 = sync.sync_once(&daemon, 100);
     assert_eq!(r1.audit_shipped, 0);
     assert!(r1.audit_retained >= 1, "the undelivered entry is retained");
-    assert!(link.pushed_batches().is_empty(), "a dead link delivers nothing");
+    assert!(
+        link.pushed_batches().is_empty(),
+        "a dead link delivers nothing"
+    );
 
-    // More audit accrues while still offline.
-    daemon.on_zone_join(pid(10), JoinReason::Launcher, 101); // ProcessJoinedZone (seq 2)
+    daemon.on_zone_join(pid(10), JoinReason::Launcher, 101);
     let r2 = sync.sync_once(&daemon, 101);
     assert_eq!(r2.audit_shipped, 0, "still offline, still nothing shipped");
 
-    // Link recovers → the next cycle ships the FULL retained tail as one continuous chain.
     link.set_online(true);
     let r3 = sync.sync_once(&daemon, 102);
     assert!(
@@ -857,7 +809,6 @@ fn audit_survives_a_dead_link_and_never_wedges_the_chain() {
     verify_batch(GENESIS, 1, &batches[0], device.public_key())
         .expect("the recovered batch verifies as an unbroken chain from genesis");
 
-    // A subsequent cycle with no new audit ships nothing — the tail was acknowledged and dropped.
     let r4 = sync.sync_once(&daemon, 103);
     assert_eq!(r4.audit_shipped, 0);
     assert_eq!(r4.audit_retained, 0);
@@ -865,19 +816,14 @@ fn audit_survives_a_dead_link_and_never_wedges_the_chain() {
 
 #[test]
 fn a_crash_before_ack_re_ships_pending_audit_via_the_file_checkpoint() {
-    // Durability across a real restart: with a dead link the entries are retained in memory AND
-    // captured in the persisted checkpoint. A fresh daemon restored from that on-disk checkpoint
-    // resumes the pending tail and ships it — so a crash before the gateway acknowledged does not
-    // leave a permanent gap.
     let dir = std::env::temp_dir().join(format!("clave-cp-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("checkpoint.bin");
     let device = DeviceSigningKey::from_seed([0xD0; 32]);
 
-    // -- lifetime 1: emit audit, fail to ship (link down), but persist to the file store.
     let tenant_pubkey = {
         let (daemon, _h, _a, kit) = make_full();
-        daemon.unlock_volume(1).unwrap(); // VolumeMounted (seq 1)
+        daemon.unlock_volume(1).unwrap();
         let link = LoopbackLink::new();
         link.set_online(false);
         let mut sync = GatewaySync::new(
@@ -891,7 +837,6 @@ fn a_crash_before_ack_re_ships_pending_audit_via_the_file_checkpoint() {
         kit.signer.public_key()
     };
 
-    // The on-disk checkpoint captured the unshipped tail.
     let cp = FileCheckpointStore::new(&path)
         .load()
         .expect("checkpoint persisted to disk");
@@ -900,16 +845,18 @@ fn a_crash_before_ack_re_ships_pending_audit_via_the_file_checkpoint() {
         "the unshipped audit tail was persisted"
     );
 
-    // -- lifetime 2: a fresh daemon restored from the on-disk checkpoint, now with a live link.
     let daemon = restored_daemon(cp, tenant_pubkey);
-    let link = LoopbackLink::new(); // online by default
+    let link = LoopbackLink::new();
     let mut sync = GatewaySync::new(
         Box::new(link.clone()),
         DeviceSigningKey::from_seed([0xD0; 32]),
         Box::new(FileCheckpointStore::new(&path)),
     );
     let r = sync.sync_once(&daemon, 200);
-    assert!(r.audit_shipped >= 1, "the resumed tail ships after the restart");
+    assert!(
+        r.audit_shipped >= 1,
+        "the resumed tail ships after the restart"
+    );
 
     let batches = link.pushed_batches();
     assert_eq!(batches.len(), 1);
@@ -949,8 +896,6 @@ fn gateway_sync_counts_a_forged_command_as_rejected_and_changes_nothing() {
         "the forged wipe changed nothing"
     );
 }
-
-// platform enforcement posture
 
 #[test]
 fn enforcement_report_marks_the_mock_as_development_only() {
@@ -993,9 +938,6 @@ fn one_unavailable_capability_blocks_production() {
     );
 }
 
-/// Rebuild a daemon from a persisted [`Checkpoint`], as production would on startup: the gateway
-/// verifier is restored with the saved high-water mark and the audit spool resumes from the saved
-/// `(seq, head)` — so neither anti-replay nor the audit chain rewinds.
 fn restored_daemon(cp: Checkpoint, tenant_pubkey: [u8; 32]) -> Arc<Daemon> {
     let platform = MockPlatform::new();
     let zones = Arc::clone(&platform.zones);
@@ -1029,7 +971,6 @@ fn restored_daemon(cp: Checkpoint, tenant_pubkey: [u8; 32]) -> Arc<Daemon> {
 
 #[test]
 fn gateway_high_water_survives_a_restart_via_the_checkpoint_store() {
-    // -- lifetime 1: apply a gateway command at counter 5; the sync cycle persists the checkpoint.
     let (daemon, _h, _a, kit) = make_full();
     let store = MemCheckpointStore::new();
     let link = LoopbackLink::new();
@@ -1047,17 +988,14 @@ fn gateway_high_water_survives_a_restart_via_the_checkpoint_store() {
     );
     assert_eq!(sync.sync_once(&daemon, 100).applied, 1);
 
-    // The sync cycle persisted the advanced anti-replay mark.
     let cp = store.load().expect("the sync cycle persisted a checkpoint");
     assert_eq!(
         cp.gateway_high_water, 5,
         "the advanced anti-replay mark was saved"
     );
 
-    // -- lifetime 2: a fresh daemon RESTORED from the persisted checkpoint (the "restart").
     let restored = restored_daemon(cp, kit.signer.public_key());
 
-    // A replay at or below the restored mark is rejected — the restart did NOT rewind it.
     let replay = kit.signer.sign(
         5,
         101,
@@ -1070,7 +1008,6 @@ fn gateway_high_water_survives_a_restart_via_the_checkpoint_store() {
         Err(GatewayError::Rejected(ProtoError::Replay { .. }))
     ));
 
-    // A genuinely new command (higher counter) is still accepted, continuing from the restored mark.
     let next = kit.signer.sign(
         6,
         101,
@@ -1080,8 +1017,6 @@ fn gateway_high_water_survives_a_restart_via_the_checkpoint_store() {
     );
     assert!(restored.apply_gateway_command(&next, 101).is_ok());
 }
-
-// process supervision: exec classification via the app allow-list
 
 fn chrome_work() -> BinaryMatch {
     BinaryMatch::Macos {
@@ -1133,7 +1068,7 @@ fn unlisted_exec_stays_personal() {
 fn child_of_a_supervised_process_inherits_membership() {
     let (daemon, _h, _a, _kit) = make_full();
     let parent = pid(60);
-    daemon.on_zone_join(parent, JoinReason::Launcher, 1); // parent is a work process
+    daemon.on_zone_join(parent, JoinReason::Launcher, 1);
     let child = pid(61);
     let helper = BinaryMatch::Macos {
         team_id: "ZZZ".into(),
@@ -1161,7 +1096,6 @@ fn resolve_launch_redirects_a_matched_app_into_the_clave_disk() {
     );
     daemon.update_policy(pol).unwrap();
 
-    // The mock volume mounts at /Volumes/ClaveDisk — so the app's HOME lands inside the enclave.
     let resolved = daemon
         .resolve_launch(&AppId("chrome-work".into()))
         .expect("a known app + mounted volume resolves");
@@ -1195,7 +1129,6 @@ fn classify_path_redirects_work_data_and_respects_passthrough() {
     daemon.update_policy(pol).unwrap();
 
     let app = AppId("chrome-work".into());
-    // Work data → redirect into the enclave; an explicit pass-through under it → left alone.
     assert_eq!(
         daemon.classify_path(&app, "/Users/alice/Documents/q3.xlsx"),
         Some(PathClass::WorkData)
@@ -1204,15 +1137,12 @@ fn classify_path_redirects_work_data_and_respects_passthrough() {
         daemon.classify_path(&app, "/Users/alice/Documents/shared/logo.png"),
         Some(PathClass::PassThrough)
     );
-    // Already inside the mounted disk → pass-through; unknown app → None.
     assert_eq!(
         daemon.classify_path(&app, "/Volumes/ClaveDisk/profiles/chrome-work/Prefs"),
         Some(PathClass::PassThrough)
     );
     assert_eq!(daemon.classify_path(&AppId("nope".into()), "/x"), None);
 }
-
-// the Clave launcher
 
 #[test]
 fn launchable_apps_lists_only_apps_with_an_executable() {
@@ -1224,7 +1154,6 @@ fn launchable_apps_lists_only_apps_with_an_executable() {
             .with_display_name("Excel (Work)")
             .with_executable("/Applications/Microsoft Excel.app"),
     );
-    // An authorization-only rule (no executable): recognized if it runs, but not launcher-launchable.
     pol.apps.allow.push(AppRule::new(
         AppId("auth-only".into()),
         BinaryMatch::Macos {
@@ -1235,7 +1164,11 @@ fn launchable_apps_lists_only_apps_with_an_executable() {
     daemon.update_policy(pol).unwrap();
 
     let apps = daemon.launchable_apps();
-    assert_eq!(apps.len(), 1, "only the app with an executable is launchable");
+    assert_eq!(
+        apps.len(),
+        1,
+        "only the app with an executable is launchable"
+    );
     assert_eq!(apps[0].app_id, AppId("excel-work".into()));
     assert_eq!(apps[0].label, "Excel (Work)");
 }
@@ -1255,12 +1188,10 @@ fn prepare_launch_resolves_the_contained_spawn_spec() {
         .prepare_launch(&AppId("excel-work".into()))
         .expect("a launchable app + a mounted volume");
     assert_eq!(spec.executable, "/Applications/Microsoft Excel.app");
-    // HOME lands inside the mounted Clave Disk, so the app's profile persists encrypted.
     assert!(spec
         .env
         .iter()
         .any(|(k, v)| k == "HOME" && v == "/Volumes/ClaveDisk/profiles/excel-work"));
 
-    // Unknown / non-launchable app → None.
     assert!(daemon.prepare_launch(&AppId("nope".into())).is_none());
 }

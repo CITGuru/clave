@@ -1,38 +1,19 @@
-//! Per-capability enforcement posture.
-//!
-//! Every Clave control runs in one of three postures, and the product must be honest about which:
-//! a `DevelopmentOnly` stand-in (a mock, launcher-seeded membership, a SIP-disabled lab Mac, a
-//! test-signed driver, a local-only profile) is **not** the same as a production-`Enforced`
-//! control on a stock OS. Encoding this in the type system lets a production CI gate fail — or the
-//! product refuse to claim a control — the moment any capability is only a dev fallback, the
-//! same way the audit schema makes personal data unrepresentable.
-
 use serde::{Deserialize, Serialize};
 
-/// The OS-backed controls a [`Platform`](crate::Platform) provides.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Capability {
-    /// Zone membership / process supervision.
     ProcessSupervision,
-    /// Encrypted Clave Disk mount + gate.
     Volume,
-    /// Clipboard / data-transfer DLP.
     Clipboard,
-    /// Network split-tunnel.
     Network,
-    /// Screen-capture protection.
     Screen,
-    /// Clave Edge overlay.
     Overlay,
-    /// Input isolation / anti-keylogging.
     Input,
 }
 
 impl Capability {
-    /// How many capabilities there are.
     pub const COUNT: usize = 7;
 
-    /// Every capability, for exhaustive iteration and reporting.
     pub const ALL: [Capability; Self::COUNT] = [
         Capability::ProcessSupervision,
         Capability::Volume,
@@ -43,7 +24,6 @@ impl Capability {
         Capability::Input,
     ];
 
-    /// Human-readable name for product surfaces and logs.
     pub fn name(self) -> &'static str {
         match self {
             Capability::ProcessSupervision => "process supervision",
@@ -63,22 +43,14 @@ impl std::fmt::Display for Capability {
     }
 }
 
-/// How a [`Capability`] is currently enforced.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum EnforcementStatus {
-    /// Production-grade: running on a stock OS with the required approval / signing / entitlement
-    /// (SIP & Secure Boot on; notarized / Microsoft-signed). The only shippable state.
     Enforced,
-    /// Working, but through a development shortcut — a mock, launcher-seeded membership, a
-    /// test-signed driver, a SIP- or Secure-Boot-disabled lab machine, or a local-only profile.
-    /// Fine for demos and CI; **never** a production posture.
     DevelopmentOnly,
-    /// Not operating at all: the entitlement, driver, TCC grant, or OS primitive is missing.
     Unavailable,
 }
 
 impl EnforcementStatus {
-    /// Whether this is the production-grade posture.
     pub fn is_enforced(self) -> bool {
         matches!(self, EnforcementStatus::Enforced)
     }
@@ -95,22 +67,18 @@ impl std::fmt::Display for EnforcementStatus {
     }
 }
 
-/// The enforcement posture of every [`Capability`] — the honest, surfaceable summary of what this
-/// build actually enforces.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EnforcementReport {
     entries: [(Capability, EnforcementStatus); Capability::COUNT],
 }
 
 impl EnforcementReport {
-    /// Build a report by asking `status` for each capability.
     pub fn from_fn(status: impl Fn(Capability) -> EnforcementStatus) -> Self {
         Self {
             entries: Capability::ALL.map(|cap| (cap, status(cap))),
         }
     }
 
-    /// The status of one capability.
     pub fn status(&self, cap: Capability) -> EnforcementStatus {
         self.entries
             .iter()
@@ -119,14 +87,10 @@ impl EnforcementReport {
             .unwrap_or(EnforcementStatus::Unavailable)
     }
 
-    /// All `(capability, status)` pairs, in [`Capability::ALL`] order.
     pub fn entries(&self) -> &[(Capability, EnforcementStatus)] {
         &self.entries
     }
 
-    /// Capabilities that are **not** production-`Enforced` — the reasons a build is a lab build.
-    /// Each carries its status so the caller can tell a `DevelopmentOnly` stand-in
-    /// from a missing (`Unavailable`) primitive.
     pub fn production_blockers(&self) -> Vec<(Capability, EnforcementStatus)> {
         self.entries
             .iter()
@@ -135,13 +99,10 @@ impl EnforcementReport {
             .collect()
     }
 
-    /// True only when *every* capability is production-`Enforced` (release rule).
     pub fn is_production_ready(&self) -> bool {
         self.entries.iter().all(|(_, s)| s.is_enforced())
     }
 
-    /// `Ok` if production-ready, else `Err(blockers)`. A production CI gate should call this and
-    /// fail the build on `Err`, so a dev-only fallback can never ship silently.
     pub fn require_production(&self) -> Result<(), Vec<(Capability, EnforcementStatus)>> {
         let blockers = self.production_blockers();
         if blockers.is_empty() {

@@ -1,6 +1,3 @@
-//! Property tests pinning the identity invariants for *all* inputs.
-//! These are the security-critical guarantees: the only way past them is a bug in the core.
-
 use clave_identity::{
     accept_invitation, authorize_enrollment, authorize_login, can, AdminAction, AuthMethod,
     DenyReason, EmailAddr, Invitation, InviteError, LoginDecision, Membership, MembershipStatus,
@@ -14,8 +11,9 @@ fn re(pat: &str) -> impl Strategy<Value = String> {
 }
 
 fn email_strat() -> impl Strategy<Value = EmailAddr> {
-    (re("[a-z]{1,8}"), re("[a-z]{1,8}"), re("[a-z]{2,4}"))
-        .prop_map(|(l, d, t)| EmailAddr::parse(&format!("{l}@{d}.{t}")).expect("regex builds valid email"))
+    (re("[a-z]{1,8}"), re("[a-z]{1,8}"), re("[a-z]{2,4}")).prop_map(|(l, d, t)| {
+        EmailAddr::parse(&format!("{l}@{d}.{t}")).expect("regex builds valid email")
+    })
 }
 
 fn role_strat() -> impl Strategy<Value = Role> {
@@ -62,8 +60,6 @@ fn member_in(ws: &Workspace, role: Role, status: MembershipStatus) -> Membership
 }
 
 proptest! {
-    /// A non-member is admitted by nothing — no email, method, or workspace shape lets `None`
-    /// through to login or enrollment (invited-only).
     #[test]
     fn non_member_is_never_admitted(
         e in email_strat(), m in method_strat(), ws in workspace_strat(),
@@ -72,7 +68,6 @@ proptest! {
         prop_assert!(!authorize_enrollment(&ws, None).is_allowed());
     }
 
-    /// A suspended member is never admitted, whatever their role or the workspace shape.
     #[test]
     fn suspended_member_is_never_admitted(
         e in email_strat(), m in method_strat(), ws in workspace_strat(), role in role_strat(),
@@ -82,8 +77,6 @@ proptest! {
         prop_assert!(!authorize_enrollment(&ws, Some(&member)).is_allowed());
     }
 
-    /// An active member of a no-domain, SSO-optional workspace always logs in with their role —
-    /// the admit path actually admits (no accidental over-denial).
     #[test]
     fn active_member_of_open_workspace_always_logs_in(
         e in email_strat(), m in method_strat(), id in any::<u64>(), role in role_strat(),
@@ -93,7 +86,6 @@ proptest! {
         prop_assert_eq!(authorize_login(&e, m, &ws, Some(&member)), LoginDecision::Allow { role });
     }
 
-    /// An SSO-required workspace rejects every non-verified-SSO sign-in, even for an active member.
     #[test]
     fn sso_required_blocks_non_sso(
         e in email_strat(), m in non_sso_method_strat(), id in any::<u64>(), role in role_strat(),
@@ -106,7 +98,6 @@ proptest! {
         );
     }
 
-    /// Domain matching ignores case on both sides.
     #[test]
     fn domain_match_is_case_insensitive(local in re("[a-z]{1,8}"), dom in re("[a-z]{1,8}\\.[a-z]{2,4}")) {
         let e = EmailAddr::parse(&format!("{local}@{dom}")).unwrap();
@@ -118,7 +109,6 @@ proptest! {
         prop_assert!(ws.domain_allowed(&e));
     }
 
-    /// An expired invitation never accepts — fail-closed regardless of every other field.
     #[test]
     fn expired_invitation_never_accepts(
         e in email_strat(),
@@ -129,15 +119,13 @@ proptest! {
         delta in 1u64..1_000_000,
     ) {
         let inv = Invitation { workspace: ws.id, email: e.clone(), role, expires_at, accepted: false };
-        let now = expires_at + delta; // strictly after expiry
+        let now = expires_at + delta;
         prop_assert_eq!(
             accept_invitation(UserId(1), &e, m, &ws, &inv, now),
             Err(InviteError::Expired)
         );
     }
 
-    /// A fresh, matching, unaccepted invitation into an open workspace yields an active membership
-    /// carrying the invitation's role.
     #[test]
     fn valid_invitation_yields_active_membership(
         e in email_strat(), id in any::<u64>(), role in role_strat(),
@@ -145,7 +133,7 @@ proptest! {
     ) {
         let ws = Workspace { id: WorkspaceId(id), allowed_domains: vec![], sso: SsoMode::Optional };
         let inv = Invitation { workspace: ws.id, email: e.clone(), role, expires_at, accepted: false };
-        let now = expires_at - 1 + before; // <= expires_at
+        let now = expires_at - 1 + before;
         let got = accept_invitation(UserId(9), &e, AuthMethod::EmailCode, &ws, &inv, now);
         prop_assert_eq!(
             got,
@@ -153,7 +141,6 @@ proptest! {
         );
     }
 
-    /// Authorization is monotonic in role: anything a lower role can do, every higher role can too.
     #[test]
     fn authorization_is_monotonic_in_role(action in prop_oneof![
         Just(AdminAction::EnrollDevice),

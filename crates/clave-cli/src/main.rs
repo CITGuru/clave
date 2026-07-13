@@ -1,10 +1,3 @@
-//! clave-cli — admin / diagnostics for Clave.
-//!
-//! Portable operator tooling: surface the platform's **enforcement posture** and
-//! **dry-run** the policy brain's classifiers (`classify_exec`, `classify_path`) so an admin can
-//! test policy before shipping it. The dispatch is a pure `run(args) -> Result<String, String>`
-//! so it is unit-testable with no real OS.
-
 use clave_core::{
     classify_exec, classify_path, AppId, AppPolicy, AppRule, BinaryMatch, FilePolicy, PolicyBundle,
 };
@@ -33,8 +26,6 @@ fn main() {
     }
 }
 
-/// Dispatch a command line into output text (or an error message). Pure for every subcommand
-/// except `enforcement`, which queries this target's OS adapter.
 fn run(args: &[String]) -> Result<String, String> {
     let (cmd, rest) = args.split_first().ok_or("no command given")?;
     match cmd.as_str() {
@@ -60,14 +51,11 @@ fn run(args: &[String]) -> Result<String, String> {
     }
 }
 
-/// Load a signed policy bundle from a JSON file (its signature/transport is the gateway's concern;
-/// this is the decoded bundle for local inspection).
 fn load_policy(path: &str) -> Result<PolicyBundle, String> {
     let text = std::fs::read_to_string(path).map_err(|e| format!("reading {path}: {e}"))?;
     serde_json::from_str(&text).map_err(|e| format!("parsing {path}: {e}"))
 }
 
-/// The launcher catalog: allow-listed work apps that carry an executable.
 fn launchable_list(pol: &PolicyBundle) -> String {
     let mut out = String::new();
     for rule in pol.apps.allow.iter().filter(|r| r.is_launchable()) {
@@ -79,10 +67,12 @@ fn launchable_list(pol: &PolicyBundle) -> String {
     out
 }
 
-/// Resolve a contained spawn spec for `app_id` against the Clave Disk at `mount`.
 fn launch_text(pol: &PolicyBundle, app_id: &str, mount: &str) -> Result<String, String> {
     let id = AppId(app_id.to_string());
-    let rule = pol.apps.rule(&id).ok_or_else(|| format!("unknown app: {app_id}"))?;
+    let rule = pol
+        .apps
+        .rule(&id)
+        .ok_or_else(|| format!("unknown app: {app_id}"))?;
     if !rule.is_launchable() {
         return Err(format!("{app_id} has no executable (authorization-only)"));
     }
@@ -98,8 +88,6 @@ fn launch_text(pol: &PolicyBundle, app_id: &str, mount: &str) -> Result<String, 
     Ok(out)
 }
 
-/// `classify-exec <team_id> <signing_id> [allowed_team:allowed_signing ...]` — does this signed
-/// binary join the work zone under the given allow-list? (Parent assumed personal.)
 fn classify_exec_cmd(args: &[String]) -> Result<String, String> {
     let team = args.first().ok_or("classify-exec needs <team_id>")?;
     let signing = args.get(1).ok_or("classify-exec needs <signing_id>")?;
@@ -128,8 +116,6 @@ fn classify_exec_cmd(args: &[String]) -> Result<String, String> {
     ))
 }
 
-/// `classify-path <mount_point> <path> [work_data_root ...]` — where does this path map for a
-/// supervised app?
 fn classify_path_cmd(args: &[String]) -> Result<String, String> {
     let mount = args.first().ok_or("classify-path needs <mount_point>")?;
     let path = args.get(1).ok_or("classify-path needs <path>")?;
@@ -141,7 +127,6 @@ fn classify_path_cmd(args: &[String]) -> Result<String, String> {
     Ok(format!("{:?}\n", classify_path(path, mount, &[], &files)))
 }
 
-/// This target's OS adapter enforcement report.
 #[cfg(target_os = "macos")]
 fn enforcement_text() -> String {
     use clave_platform::Platform;
@@ -224,7 +209,7 @@ mod tests {
     fn missing_args_and_unknown_commands_error() {
         assert!(run(&args(&["frobnicate"])).is_err());
         assert!(run(&[]).is_err());
-        assert!(run(&args(&["classify-path", "/mnt"])).is_err()); // missing <path>
+        assert!(run(&args(&["classify-path", "/mnt"])).is_err());
     }
 
     fn policy_with_excel() -> PolicyBundle {
@@ -260,7 +245,6 @@ mod tests {
 
     #[test]
     fn policy_round_trips_through_json() {
-        // The `apps`/`launch` subcommands load a JSON policy; ensure the bundle serializes cleanly.
         let pol = policy_with_excel();
         let json = serde_json::to_string(&pol).unwrap();
         let back: PolicyBundle = serde_json::from_str(&json).unwrap();

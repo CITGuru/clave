@@ -1,6 +1,3 @@
-//! Crash-consistency / fail-closed under backing-store I/O failure: a write interrupted
-//! mid-stream (a "pull the plug") leaves only ciphertext on the backing — never plaintext.
-
 use std::sync::{Arc, Mutex};
 
 use clave_core::{JoinReason, ZoneRegistry};
@@ -10,8 +7,6 @@ use clave_volume::{
     SECTOR_SIZE,
 };
 
-/// A backing store that succeeds `fail_after` sector writes and then fails every write — modelling
-/// a power loss / device error partway through a multi-sector write.
 struct FailingBacking {
     state: Mutex<State>,
     fail_after: usize,
@@ -73,7 +68,7 @@ fn a_write_failing_mid_stream_leaves_only_ciphertext() {
     let id = ContainerId(0xFA17);
     let keystore = Arc::new(MemKeyStore::new());
     keystore.provision(id, Kek::from_bytes([1u8; 32]), &Dek::from_bytes([2u8; 64]));
-    let backing = Arc::new(FailingBacking::new(8, 1)); // first sector write succeeds, then fails
+    let backing = Arc::new(FailingBacking::new(8, 1));
     let zones = Arc::new(ZoneRegistry::new());
     let work = ProcId::windows(10, 1);
     zones.join(work, JoinReason::Launcher);
@@ -81,7 +76,6 @@ fn a_write_failing_mid_stream_leaves_only_ciphertext() {
     let mut vol = ClaveVolume::new(ContainerMeta::new(id), keystore, backing.clone(), zones);
     vol.unlock().unwrap();
 
-    // A 3-sector write that the backing aborts after the first sector.
     let plaintext = vec![0x42u8; SECTOR_SIZE * 3];
     let result = vol.write(&work, 0, &plaintext);
     assert!(
@@ -89,8 +83,6 @@ fn a_write_failing_mid_stream_leaves_only_ciphertext() {
         "the interrupted write fails closed"
     );
 
-    // The whole buffer is encrypted *before* any sector is written, so the backing can only ever
-    // hold ciphertext: the plaintext pattern appears nowhere as a full sector.
     let raw = backing.raw();
     assert_ne!(
         &raw[..SECTOR_SIZE],

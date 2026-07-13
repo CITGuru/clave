@@ -1,6 +1,3 @@
-//! Property tests for the encrypted-volume crypto core: XTS round-trips and AES-KW key
-//! wrapping hold for arbitrary keys, data, and sector indices.
-
 use clave_volume::{Dek, Kek, XtsCipher, SECTOR_SIZE};
 use proptest::prelude::*;
 
@@ -13,10 +10,8 @@ fn kek_bytes() -> impl Strategy<Value = [u8; 32]> {
 }
 
 proptest! {
-    // The AES is fast but XTS over several sectors per case adds up; 64 cases is plenty.
     #![proptest_config(ProptestConfig { cases: 64, ..ProptestConfig::default() })]
 
-    /// AES-256-XTS decrypt is the exact inverse of encrypt for any key, data, and sector index.
     #[test]
     fn xts_round_trips(d in dek(), sectors in 1usize..=3, first in any::<u64>(), fill in any::<u8>()) {
         let cipher = XtsCipher::new(&d);
@@ -28,8 +23,6 @@ proptest! {
         prop_assert_eq!(buf, original);
     }
 
-    /// Wrapping a DEK under a KEK and unwrapping it recovers the *same key material*: a cipher built
-    /// from the unwrapped DEK decrypts what a cipher built from the original encrypted.
     #[test]
     fn aes_kw_round_trips_the_key(d in dek(), k in kek_bytes(), fill in any::<u8>()) {
         let kek = Kek::from_bytes(k);
@@ -43,7 +36,6 @@ proptest! {
         prop_assert_eq!(buf, original);
     }
 
-    /// A wrong KEK never unwraps a DEK — the AES-KW integrity check fails (fail-closed).
     #[test]
     fn wrong_kek_never_unwraps(d in dek(), k1 in kek_bytes(), k2 in kek_bytes()) {
         prop_assume!(k1 != k2);

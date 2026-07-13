@@ -1,14 +1,3 @@
-//! WorkOS-backed [`IdentityProvider`] (reqwest + JWKS verification). Compiled only with the
-//! `workos` feature.
-//!
-//! Authentication is delegated to WorkOS AuthKit/User Management: the console code is
-//! exchanged for `{user, access_token, refresh_token, organization_id}`, the access JWT is verified
-//! against WorkOS's JWKS, and the organization is mapped to our [`WorkspaceId`]. Authorization is
-//! *not* done here — that is [`crate::Gateway`]'s job over `clave-identity`.
-//!
-//! NB: exact endpoint paths/shapes should be confirmed against current WorkOS API docs; they are
-//! centralized here behind `base_url` so they are easy to adjust.
-
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -17,11 +6,8 @@ use serde::Deserialize;
 
 use crate::{DeviceAuth, GatewayError, IdentityProvider, VerifiedUser};
 
-/// Maps a WorkOS organization id to our workspace. In production this is a DB lookup
-/// (`workspace.workos_org_id`); injected so this adapter stays decoupled from the store.
 pub type WorkspaceResolver = Arc<dyn Fn(&str) -> Option<WorkspaceId> + Send + Sync>;
 
-/// WorkOS adapter.
 pub struct WorkosProvider {
     http: reqwest::Client,
     api_key: String,
@@ -74,7 +60,6 @@ struct AccessClaims {
 }
 
 impl WorkosProvider {
-    /// Build a provider from the WorkOS API key + client id and an org→workspace resolver.
     pub fn new(
         api_key: impl Into<String>,
         client_id: impl Into<String>,
@@ -89,13 +74,11 @@ impl WorkosProvider {
         }
     }
 
-    /// Override the API base URL (tests / self-hosted).
     pub fn with_base_url(mut self, url: impl Into<String>) -> Self {
         self.base_url = url.into();
         self
     }
 
-    /// Verify a WorkOS access JWT against the published JWKS (RS256).
     async fn verify_access_token(&self, token: &str) -> Result<(), GatewayError> {
         use jsonwebtoken::jwk::{AlgorithmParameters, JwkSet};
         use jsonwebtoken::{decode, decode_header, Algorithm, DecodingKey, Validation};
@@ -129,11 +112,11 @@ impl WorkosProvider {
         Ok(())
     }
 
-    /// Verify the token and assemble the authenticated user.
     async fn verify_and_build(&self, body: AuthResponse) -> Result<VerifiedUser, GatewayError> {
         self.verify_access_token(&body.access_token).await?;
-        let email = EmailAddr::parse(&body.user.email)
-            .ok_or_else(|| GatewayError::Idp("identity provider returned an invalid email".into()))?;
+        let email = EmailAddr::parse(&body.user.email).ok_or_else(|| {
+            GatewayError::Idp("identity provider returned an invalid email".into())
+        })?;
         let workspace = body
             .organization_id
             .as_deref()
@@ -175,13 +158,13 @@ impl IdentityProvider for WorkosProvider {
         self.verify_and_build(body).await
     }
 
-    async fn begin_device_auth(
-        &self,
-        _workspace: WorkspaceId,
-    ) -> Result<DeviceAuth, GatewayError> {
+    async fn begin_device_auth(&self, _workspace: WorkspaceId) -> Result<DeviceAuth, GatewayError> {
         let resp = self
             .http
-            .post(format!("{}/user_management/authorize/device", self.base_url))
+            .post(format!(
+                "{}/user_management/authorize/device",
+                self.base_url
+            ))
             .json(&serde_json::json!({ "client_id": self.client_id }))
             .send()
             .await
@@ -220,7 +203,6 @@ impl IdentityProvider for WorkosProvider {
             let body: AuthResponse = resp.json().await.map_err(idp_err)?;
             return Ok(Some(self.verify_and_build(body).await?));
         }
-        // The device grant returns 4xx with `error=authorization_pending` while waiting.
         Ok(None)
     }
 }

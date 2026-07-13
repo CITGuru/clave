@@ -1,18 +1,3 @@
-//! [`WindowsPlatform`] — the daemon-side Windows [`Platform`] adapter.
-//!
-//! The Windows mechanism is a signed **WFP callout** (split tunnel), a **minifilter**
-//! (Clave Disk gating), and a **process-notify driver** that feeds the supervised set over
-//! an inverted-call `DeviceIoControl` channel — none of which build on a non-Windows
-//! host (they live behind `cfg(windows)` and in the WDK driver project). This adapter is the
-//! portable daemon-side seam: **process supervision** (the driver-fed zone mirror) and **network
-//! split-tunnel** (the shared `clave-net` classifier the WFP callout invokes) are wired to real
-//! decision logic; the rest are honest stubs.
-//!
-//! [`Platform::enforcement`] reports the truth: nothing reaches `Enforced`
-//! without Microsoft-signed drivers on a Secure-Boot machine. The process/network paths are
-//! `DevelopmentOnly` (a WinDivert / toolhelp / Job-object stand-in or a test-signed driver);
-//! the unbuilt subsystems are `Unavailable`.
-
 use std::sync::{Arc, Mutex};
 
 use clave_core::ZoneRegistry;
@@ -22,8 +7,6 @@ use clave_platform::{
     VolumeMount, WindowId, WindowOverlay, Zone,
 };
 
-/// Split-tunnel routing via the shared classifier — the same decision the WFP callout invokes for
-/// each `ALE_CONNECT_REDIRECT` classify, and the same as macOS.
 pub struct WinNetwork {
     zones: Arc<ZoneRegistry>,
 }
@@ -34,7 +17,6 @@ impl NetworkTunnel for WinNetwork {
     }
 }
 
-/// The encrypted-volume mount (a WinFsp encrypting filesystem) — not built yet.
 #[derive(Default)]
 pub struct WinVolumeMount;
 
@@ -46,20 +28,15 @@ impl VolumeMount for WinVolumeMount {
         None
     }
     fn request_wipe(&self) -> PResult<()> {
-        // The authoritative crypto-shred is the volume core's job (`clave-volume`); with no WinFsp
-        // mount there is nothing to tear down here.
         Ok(())
     }
 }
 
-/// Clipboard DLP — the Windows broker (per-process clipboard gate) is Phase 5.
 #[derive(Default)]
 pub struct WinClipboard;
 
 impl ClipboardBroker for WinClipboard {
     fn classify_and_gate(&self, src: Zone, dst: Zone, _fmt: ClipFormat) -> Decision {
-        // Fail-closed: with no broker installed we cannot enforce the nuanced policy matrix, so
-        // allow same-zone and deny cross-zone. (The real broker consults the policy.)
         if src == dst {
             Decision::Allow
         } else {
@@ -68,17 +45,15 @@ impl ClipboardBroker for WinClipboard {
     }
 }
 
-/// Screen-capture protection — `SetWindowDisplayAffinity` via the shim, Phase 5.
 #[derive(Default)]
 pub struct WinScreen;
 
 impl ScreenGuard for WinScreen {
     fn protect_window(&self, _w: WindowId) -> PResult<()> {
-        Ok(()) // best-effort no-op until the Phase-5 affinity path exists
+        Ok(())
     }
 }
 
-/// Clave Edge overlay — layered window + `SetWinEventHook`, Phase 5.
 #[derive(Default)]
 pub struct WinOverlay;
 
@@ -87,7 +62,6 @@ impl WindowOverlay for WinOverlay {
     fn untrack(&self, _w: WindowId) {}
 }
 
-/// Input isolation — keyboard filter driver, Phase 6 (optional). Not protected.
 #[derive(Default)]
 pub struct WinInput;
 
@@ -97,8 +71,6 @@ impl InputGuard for WinInput {
     }
 }
 
-/// The Windows platform adapter, built around the daemon's shared zone mirror (`zones`), which the
-/// process-notify driver feeds over the inverted-call IOCTL channel in production (deferred).
 pub struct WindowsPlatform {
     zones: Arc<ZoneRegistry>,
     network: WinNetwork,
@@ -111,8 +83,6 @@ pub struct WindowsPlatform {
 }
 
 impl WindowsPlatform {
-    /// Build the adapter around `zones` — the daemon's mirror, shared so one membership set governs
-    /// both routing and the access gate.
     pub fn new(zones: Arc<ZoneRegistry>) -> Self {
         let network = WinNetwork {
             zones: Arc::clone(&zones),
@@ -129,9 +99,6 @@ impl WindowsPlatform {
         }
     }
 
-    /// Update a capability's reported posture. A production adapter calls this at runtime as it
-    /// detects the signed drivers loaded, Secure Boot state, etc. Nothing should be set to
-    /// `Enforced` unless running on a stock, Microsoft-signed, Secure-Boot machine.
     pub fn set_enforcement(&self, cap: Capability, status: EnforcementStatus) {
         for e in self
             .enforcement
@@ -146,9 +113,6 @@ impl WindowsPlatform {
     }
 }
 
-/// Honest defaults: the WFP/process paths have real Rust decision logic but only dev-grade
-/// enforcement (a WinDivert/toolhelp stand-in or a test-signed driver); the unbuilt
-/// subsystems are `Unavailable`.
 fn default_enforcement() -> [(Capability, EnforcementStatus); Capability::COUNT] {
     use Capability::*;
     use EnforcementStatus::*;
@@ -210,7 +174,6 @@ mod tests {
     fn supervisor_and_network_share_the_zone_mirror() {
         let p = platform();
         let work = ProcId::windows(1234, 1);
-        // Personal until the driver seeds membership → never inspected, routes Direct.
         assert!(!p.supervisor().is_supervised(&work));
         assert_eq!(p.network().route(&work, false), Route::Direct);
 

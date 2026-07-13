@@ -1,11 +1,3 @@
-//! The Axum HTTP edge. It is a thin shell over [`crate::Gateway`]: parse the
-//! request, call the orchestration, map the outcome to a status code, and carry the session in a
-//! **sealed cookie**. All policy lives in `clave-identity`; all state behind the [`Store`] seam.
-//!
-//! The router is **type-erased** ([`DynGateway`]) so handlers are non-generic and the same binary
-//! serves whatever `IdentityProvider`/`Store` it was built with (mock in tests, WorkOS + Postgres
-//! in production).
-
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -26,25 +18,17 @@ use serde::{Deserialize, Serialize};
 
 use crate::{Gateway, GatewayError, IdentityProvider, Session, Store};
 
-/// Name of the session cookie.
 pub const SESSION_COOKIE: &str = "clave_session";
 
-/// How long a console session is valid before a fresh login is required (8 hours).
 const SESSION_TTL_SECS: u64 = 8 * 60 * 60;
 
-/// A type-erased gateway: the concrete `IdentityProvider`/`Store` are chosen at construction, so
-/// the HTTP layer compiles once regardless of which adapters are wired in.
 pub type DynGateway = Gateway<Arc<dyn IdentityProvider>, Arc<dyn Store>>;
 
-/// Encrypts/decrypts the session blob carried in the cookie (the sealed-cookie
-/// carrier). ChaCha20-Poly1305 AEAD under a 32-byte server key, with a fresh random nonce.
 pub struct SessionSealer {
     key: [u8; 32],
 }
 
 impl SessionSealer {
-    /// Build a sealer from a 32-byte secret key (rotate by re-keying; old cookies then fail to
-    /// unseal and the user re-logs in).
     pub fn new(key: [u8; 32]) -> Self {
         Self { key }
     }
@@ -53,7 +37,6 @@ impl SessionSealer {
         ChaCha20Poly1305::new(Key::from_slice(&self.key))
     }
 
-    /// Seal a session into an opaque, URL-safe cookie value.
     pub fn seal(&self, session: &Session) -> Result<String, GatewayError> {
         let plaintext =
             serde_json::to_vec(session).map_err(|e| GatewayError::Store(e.to_string()))?;
@@ -69,7 +52,6 @@ impl SessionSealer {
         Ok(URL_SAFE_NO_PAD.encode(blob))
     }
 
-    /// Recover a session from a cookie value. Any tampering or wrong key yields `None` (fail-closed).
     pub fn unseal(&self, token: &str) -> Option<Session> {
         let blob = URL_SAFE_NO_PAD.decode(token).ok()?;
         if blob.len() < 12 {
@@ -81,7 +63,6 @@ impl SessionSealer {
     }
 }
 
-/// Shared application state handed to every handler.
 #[derive(Clone)]
 pub struct AppState {
     pub gateway: Arc<DynGateway>,
@@ -89,7 +70,6 @@ pub struct AppState {
 }
 
 impl AppState {
-    /// Assemble the state from a (type-erased) gateway and a session sealer.
     pub fn new(gateway: Arc<DynGateway>, sealer: SessionSealer) -> Self {
         Self {
             gateway,
@@ -98,7 +78,6 @@ impl AppState {
     }
 }
 
-/// The control-plane router.
 pub fn build_router(state: AppState) -> Router {
     Router::new()
         .route("/auth/console/callback", post(console_callback))
@@ -112,7 +91,6 @@ pub fn build_router(state: AppState) -> Router {
 
 #[derive(Deserialize)]
 struct ConsoleCallback {
-    /// The WorkOS authorization code from the AuthKit redirect.
     code: String,
 }
 
@@ -144,14 +122,14 @@ struct EnrollPoll {
 struct EnrollComplete {
     workspace: u64,
     device_code: String,
-    /// The device's Ed25519 public key (the runtime trust anchor), hex-encoded — 64 hex chars.
     device_pubkey: String,
-    /// Optional: the device's volume wrapping key (hardware KEK), hex-encoded — 64 hex chars. When
-    /// present and a volume-key service is configured, the response carries the wrapped volume key.
     device_wrapping_key: Option<String>,
 }
 
-async fn console_callback(State(st): State<AppState>, Json(body): Json<ConsoleCallback>) -> Response {
+async fn console_callback(
+    State(st): State<AppState>,
+    Json(body): Json<ConsoleCallback>,
+) -> Response {
     match st
         .gateway
         .console_login(&body.code, now(), SESSION_TTL_SECS)
@@ -192,7 +170,11 @@ async fn logout() -> Response {
 }
 
 async fn enroll_start(State(st): State<AppState>, Json(body): Json<EnrollStart>) -> Response {
-    match st.gateway.begin_enrollment(WorkspaceId(body.workspace)).await {
+    match st
+        .gateway
+        .begin_enrollment(WorkspaceId(body.workspace))
+        .await
+    {
         Ok(device_auth) => Json(device_auth).into_response(),
         Err(e) => err_response(e),
     }
@@ -211,10 +193,12 @@ async fn enroll_poll(State(st): State<AppState>, Json(body): Json<EnrollPoll>) -
 
 async fn enroll_complete(State(st): State<AppState>, Json(body): Json<EnrollComplete>) -> Response {
     let Some(pubkey) = parse_pubkey(&body.device_pubkey) else {
-        return (StatusCode::BAD_REQUEST, "device_pubkey must be 64 hex chars (32 bytes)")
+        return (
+            StatusCode::BAD_REQUEST,
+            "device_pubkey must be 64 hex chars (32 bytes)",
+        )
             .into_response();
     };
-    // The wrapping key is optional, but if present it must be well-formed.
     let wrapping_key = match body.device_wrapping_key.as_deref().map(parse_pubkey) {
         None => None,
         Some(Some(k)) => Some(k),
@@ -242,7 +226,6 @@ async fn enroll_complete(State(st): State<AppState>, Json(body): Json<EnrollComp
     }
 }
 
-/// Parse a 64-char hex string into a 32-byte Ed25519 public key. `None` on any malformed input.
 fn parse_pubkey(s: &str) -> Option<[u8; 32]> {
     if s.len() != 64 {
         return None;
@@ -261,7 +244,6 @@ fn now() -> u64 {
         .unwrap_or(0)
 }
 
-/// Map a [`GatewayError`] to an HTTP status: refusals are 4xx, infra faults 5xx.
 fn err_response(e: GatewayError) -> Response {
     let code = match &e {
         GatewayError::Unauthorized(_) | GatewayError::Invite(_) => StatusCode::FORBIDDEN,

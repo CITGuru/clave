@@ -1,6 +1,3 @@
-//! Tamper-evident audit spool: chaining, device signing, and gateway-side detection of
-//! suppression / rewriting / forgery.
-
 use std::sync::{Arc, Mutex};
 
 use clave_core::{AuditAction, AuditEvent, AuditSink, Reason, Verdict};
@@ -50,19 +47,20 @@ fn peek_is_non_destructive_and_confirm_drops_only_acknowledged_entries() {
     spool.emit(ev(1, AuditAction::Wiped));
     spool.emit(ev(2, AuditAction::NetworkBlocked));
 
-    // Peek does not remove anything — a failed ship must be able to retry the same entries.
     let (entries, _head_at_2) = spool.peek();
     assert_eq!(entries.len(), 2);
     assert_eq!(spool.pending_len(), 2, "peek leaves the tail intact");
 
-    // A new entry arrives after the peek (concurrent emit) → the head advances.
     spool.emit(ev(3, AuditAction::ClipboardBlocked));
     let head_at_3 = spool.head();
 
-    // Acknowledge only through seq 2 (what we peeked/shipped): entry 3 is retained.
     spool.confirm_through(2);
     let (remaining, head_after_confirm) = spool.peek();
-    assert_eq!(remaining.len(), 1, "only the acknowledged entries were dropped");
+    assert_eq!(
+        remaining.len(),
+        1,
+        "only the acknowledged entries were dropped"
+    );
     assert_eq!(remaining[0].seq, 3);
     assert_eq!(
         head_after_confirm, head_at_3,
@@ -72,8 +70,6 @@ fn peek_is_non_destructive_and_confirm_drops_only_acknowledged_entries() {
 
 #[test]
 fn a_peeked_batch_verifies_and_the_chain_continues_after_confirm() {
-    // Peek → sign → verify → confirm, then keep emitting: the gateway's next batch continues the
-    // chain from the confirmed head with no gap (this is the ack-based ship path).
     let spool = AuditSpool::new();
     let dev = device();
     spool.emit(ev(1, AuditAction::Wiped));
@@ -87,7 +83,6 @@ fn a_peeked_batch_verifies_and_the_chain_continues_after_confirm() {
     spool.emit(ev(3, AuditAction::ClipboardBlocked));
     let (entries, head) = spool.peek();
     let batch2 = dev.sign_batch(entries, head);
-    // The gateway continues from the head it last accepted, at the next seq — no gap, no break.
     verify_batch(head1, 3, &batch2, dev.public_key())
         .expect("batch 2 continues the chain from the confirmed head");
 }
@@ -99,7 +94,7 @@ fn tampering_with_an_event_is_detected() {
     spool.emit(ev(1, AuditAction::Wiped));
 
     let (mut entries, head) = spool.drain();
-    entries[0].event = ev(1, AuditAction::ProcessJoinedZone); // rewrite the event, keep the hash
+    entries[0].event = ev(1, AuditAction::ProcessJoinedZone);
     let batch = dev.sign_batch(entries, head);
 
     assert!(matches!(
@@ -117,7 +112,7 @@ fn dropping_a_middle_entry_is_caught_as_a_gap() {
     spool.emit(ev(3, AuditAction::ClipboardBlocked));
 
     let (mut entries, head) = spool.drain();
-    entries.remove(1); // suppress the middle event
+    entries.remove(1);
     let batch = dev.sign_batch(entries, head);
 
     assert!(matches!(
@@ -137,7 +132,7 @@ fn truncating_the_tail_is_detected() {
     spool.emit(ev(2, AuditAction::NetworkBlocked));
 
     let (mut entries, head) = spool.drain();
-    entries.pop(); // drop the last entry but keep the (validly signed) head
+    entries.pop();
     let batch = dev.sign_batch(entries, head);
 
     assert!(matches!(
@@ -154,7 +149,7 @@ fn forged_signature_is_rejected() {
 
     let (entries, head) = spool.drain();
     let attacker = DeviceSigningKey::from_seed([0xAA; 32]);
-    let batch = attacker.sign_batch(entries, head); // signed by the wrong device key
+    let batch = attacker.sign_batch(entries, head);
 
     assert!(matches!(
         verify_batch(GENESIS, 1, &batch, dev.public_key()),
@@ -175,14 +170,12 @@ fn chain_continues_across_drains() {
     spool.emit(ev(2, AuditAction::NetworkBlocked));
     let (e2, h2) = spool.drain();
     let b2 = dev.sign_batch(e2, h2);
-    // The gateway resumes from the last head it accepted, at the next sequence number.
     let head2 = verify_batch(head1, 2, &b2, dev.public_key()).unwrap();
     assert_eq!(head2, h2);
 }
 
 #[test]
 fn resume_restores_chain_position() {
-    // A daemon restart resumes the spool from the persisted (seq, head) so the chain is unbroken.
     let spool = AuditSpool::new();
     spool.emit(ev(1, AuditAction::Wiped));
     let (seq, head) = (spool.seq(), spool.head());
