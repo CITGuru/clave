@@ -63,10 +63,10 @@ export function CompactView() {
       const res = await launchApp(app.id);
       if (res.kind === "launched") {
         flashToast(`Launched ${app.label} — contained · pid ${res.pid}`);
-      } else if (res.kind === "resolved") {
-        flashToast(`${app.label} resolved — start the daemon to launch`);
+      } else if (res.kind === "no_daemon") {
+        flashToast(`Start the daemon to launch ${app.label}`);
       } else {
-        flashToast(`Couldn’t launch ${app.label}`);
+        flashToast(`Couldn't launch ${app.label}: ${res.error}`);
       }
     } catch (e) {
       console.error(e);

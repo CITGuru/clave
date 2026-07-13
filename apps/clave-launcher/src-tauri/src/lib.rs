@@ -108,15 +108,26 @@ async fn launch_spec(app_id: String) -> Option<LaunchInfo> {
 }
 
 #[tauri::command]
-async fn launch_app(app_id: String) -> Option<u32> {
+async fn launch_app(app_id: String) -> Result<u32, String> {
     #[cfg(unix)]
     if let Some(mut client) = daemon().await {
-        if let Ok(pid) = client.launch(AppId(app_id.clone())).await {
-            return pid;
-        }
+        return match client.launch(AppId(app_id)).await {
+            Ok(Some(pid)) => Ok(pid),
+            Ok(None) => Err("launch returned no pid".into()),
+            Err(clave_ipc::transport::TransportError::LaunchFailed(e)) => Err(e),
+            Err(e) => Err(e.to_string()),
+        };
     }
-    let _ = app_id;
-    None
+    #[cfg(unix)]
+    {
+        let _ = app_id;
+        Err("daemon not running".into())
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = app_id;
+        Err("launch is only supported on unix".into())
+    }
 }
 
 #[tauri::command]

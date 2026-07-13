@@ -19,9 +19,9 @@ serde = { workspace = true }
 postcard = { version = "1", features = ["use-std"] }
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "sync", "net", "time"] }
 
-# The OS adapter is linked per target (doc 11 §2).
 [target.'cfg(target_os = "macos")'.dependencies]
 clave-mac = { path = "../clave-mac" }
+serde_json = "1"
 
 [target.'cfg(target_os = "windows")'.dependencies]
 clave-win = { path = "../clave-win" }
@@ -29,7 +29,5 @@ clave-win = { path = "../clave-win" }
 [dev-dependencies]
 clave-testkit = { path = "../clave-testkit" }
 clave-proto = { path = "../clave-proto" }
-# End-to-end tests only: drive a real device Daemon and a real control-plane Gateway through the
-# audit/command loop. The gateway never depends on the daemon in production (no cycle).
 clave-gateway = { path = "../clave-gateway" }
 clave-identity = { path = "../clave-identity" }

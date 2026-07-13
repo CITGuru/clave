@@ -219,19 +219,11 @@ pub fn run_clave_edge(
     }
 }
 
-/// How many on-screen windows belong to work apps.
-///
-/// A screen capture only concerns the enclave when work content is actually on the screen — a
-/// screenshot of a purely personal desktop is never instrumented (doc 01). "Running" is not enough:
-/// a minimised or hidden work app has nothing to capture, so this counts real, non-degenerate
-/// windows at layer 0, exactly as the overlay does when deciding what to frame.
 pub fn work_windows_on_screen(zones: &ZoneRegistry) -> usize {
     let supervised: HashSet<u32> = zones.supervised_pids().into_iter().collect();
     if supervised.is_empty() {
         return 0;
     }
-    // SAFETY: CGWindowList returns a +1 CFArray of CFDictionaries; every read below goes through
-    // the same null- and type-checked helpers the overlay uses, and the array is released after.
     unsafe {
         let info = CGWindowListCopyWindowInfo(WINDOW_LIST_OPTION, NULL_WINDOW_ID);
         if info.is_null() {

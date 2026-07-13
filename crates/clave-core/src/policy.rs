@@ -2,6 +2,7 @@ use clave_platform::{ClipFormat, Decision, Rgba, Zone};
 use serde::{Deserialize, Serialize};
 
 use crate::app::AppPolicy;
+use crate::net::{DnsSteering, NetworkProvider};
 use crate::overlay::BorderCfg;
 
 pub type UnixTime = u64;
@@ -34,6 +35,7 @@ impl PolicyBundle {
             network: NetworkPolicy {
                 blocked_hosts: Vec::new(),
                 static_egress_ip: None,
+                providers: Vec::new(),
             },
             files: FilePolicy {
                 allow_save_outside_enclave: false,
@@ -48,17 +50,10 @@ impl PolicyBundle {
     }
 }
 
-/// What may read the keyboard while a work app has focus.
-///
-/// Kept separate from [`ScreenPolicy`] even though the shape matches: an admin may well sanction a
-/// meeting app to capture the screen while never sanctioning anything to read keystrokes.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct InputPolicy {
-    /// What to do when a non-work process holds a keyboard event tap while a work app is focused.
     #[serde(default = "default_on_tap")]
     pub on_tap: Decision,
-    /// Tools permitted to tap the keyboard even under a work app — a text expander or hotkey
-    /// launcher the company sanctions. Matched against the process's executable name.
     #[serde(default)]
     pub allowed_tappers: Vec<String>,
 }
@@ -78,24 +73,14 @@ impl InputPolicy {
     }
 }
 
-/// Deny by default: nothing outside the enclave reads work keystrokes. macOS cannot *enforce* this
-/// (doc 06 §3.1 — no shippable kernel input filter); the denial is still the decision, and an
-/// unenforceable one is audited.
 fn default_on_tap() -> Decision {
     Decision::Deny
 }
 
-/// What may capture the screen while work windows are on it.
-///
-/// A capture is only ever a *work* concern when work content is actually visible — a screenshot of
-/// a personal desktop is none of our business (doc 01: personal resources are never instrumented).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ScreenPolicy {
-    /// What to do when a non-work process captures the screen while work windows are visible.
     #[serde(default = "default_on_capture")]
     pub on_capture: Decision,
-    /// Capture tools permitted even over work content — e.g. the sanctioned meeting app that
-    /// employees are expected to screen-share from. Matched against the process's executable name.
     #[serde(default)]
     pub allowed_capturers: Vec<String>,
 }
@@ -110,14 +95,11 @@ impl Default for ScreenPolicy {
 }
 
 impl ScreenPolicy {
-    /// Whether `exe` (a process's executable name) is a sanctioned capture tool.
     pub fn is_allowed_capturer(&self, exe: &str) -> bool {
         self.allowed_capturers.iter().any(|a| a == exe)
     }
 }
 
-/// Deny by default: work content is not screenshot-able. macOS cannot always *enforce* this
-/// (doc 07 §3.4) — the decision is still the decision, and an unenforceable denial is audited.
 fn default_on_capture() -> Decision {
     Decision::Deny
 }
@@ -183,6 +165,8 @@ impl ClipboardPolicy {
 pub struct NetworkPolicy {
     pub blocked_hosts: Vec<String>,
     pub static_egress_ip: Option<String>,
+    #[serde(default)]
+    pub providers: Vec<NetworkProvider>,
 }
 
 impl NetworkPolicy {
@@ -190,9 +174,17 @@ impl NetworkPolicy {
         let host = normalize_host(host);
         self.blocked_hosts.iter().any(|h| normalize_host(h) == host)
     }
+
+    pub fn egress_provider(&self) -> Option<&NetworkProvider> {
+        self.providers.iter().find(|p| p.is_egress())
+    }
+
+    pub fn dns_steering(&self) -> Option<&DnsSteering> {
+        self.providers.iter().find_map(|p| p.dns.as_ref())
+    }
 }
 
-fn normalize_host(host: &str) -> String {
+pub(crate) fn normalize_host(host: &str) -> String {
     host.trim_end_matches('.').to_ascii_lowercase()
 }
 
@@ -218,6 +210,7 @@ mod tests {
         NetworkPolicy {
             blocked_hosts: blocked.iter().map(|s| s.to_string()).collect(),
             static_egress_ip: None,
+            providers: Vec::new(),
         }
     }
 

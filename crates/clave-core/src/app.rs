@@ -90,8 +90,6 @@ pub struct LaunchSpec {
     pub args: Vec<String>,
     pub env: Vec<(String, String)>,
     pub namespace_prefix: Option<String>,
-    /// Paths (relative to the real user home) to make available inside the contained HOME — the
-    /// OS layer symlinks each existing one at launch. Empty ⇒ a pristine home.
     #[serde(default)]
     pub seed_home: Vec<String>,
 }
@@ -108,8 +106,6 @@ pub struct LaunchProfile {
     pub namespace_prefix: Option<String>,
     pub hive_seed: Option<String>,
     pub passthrough_paths: Vec<String>,
-    /// Paths under the real user home (e.g. `.zshrc`, `.cargo`) the daemon symlinks into the
-    /// contained HOME at launch. Empty ⇒ a pristine home.
     #[serde(default)]
     pub seed_home: Vec<String>,
 }
@@ -126,8 +122,6 @@ pub struct ResolvedLaunch {
 }
 
 impl LaunchProfile {
-    /// HOME is `<mount>/<user>`; each app's profile (`--user-data-dir`) is `<home>/profiles/<sub>`,
-    /// where `<sub>` is `profile_subdir` or the `app_id`.
     pub fn resolve(&self, app_id: &AppId, mount_point: &str, user: &str) -> ResolvedLaunch {
         let sub = if self.profile_subdir.is_empty() {
             app_id.0.as_str()
@@ -172,8 +166,6 @@ impl LaunchProfile {
         }
     }
 
-    /// Expose paths (relative to the real user home) inside the contained HOME at launch — see
-    /// [`LaunchProfile::seed_home`].
     pub fn with_seed_home<I, S>(mut self, paths: I) -> Self
     where
         I: IntoIterator<Item = S>,
@@ -194,10 +186,10 @@ impl AppPolicy {
         Self { allow: Vec::new() }
     }
 
-    pub fn match_app(&self, presented: &BinaryMatch) -> Option<&AppId> {
+    pub fn match_app(&self, presented: &BinaryMatch, is_platform_binary: bool) -> Option<&AppId> {
         self.allow
             .iter()
-            .find(|r| &r.binary == presented)
+            .find(|r| binary_matches(&r.binary, presented, is_platform_binary))
             .map(|r| &r.app_id)
     }
 
@@ -215,10 +207,11 @@ pub struct ExecVerdict {
 
 pub fn classify_exec(
     binary: &BinaryMatch,
+    is_platform_binary: bool,
     parent_supervised: bool,
     apps: &AppPolicy,
 ) -> ExecVerdict {
-    if let Some(app) = apps.match_app(binary) {
+    if let Some(app) = apps.match_app(binary, is_platform_binary) {
         ExecVerdict {
             allow: true,
             joins_zone: true,
@@ -230,6 +223,41 @@ pub fn classify_exec(
             joins_zone: parent_supervised,
             matched: None,
         }
+    }
+}
+
+fn binary_matches(rule: &BinaryMatch, presented: &BinaryMatch, is_platform_binary: bool) -> bool {
+    match (rule, presented) {
+        (
+            BinaryMatch::Macos {
+                team_id: rule_team,
+                signing_id: rule_sign,
+            },
+            BinaryMatch::Macos {
+                team_id: pres_team,
+                signing_id: pres_sign,
+            },
+        ) => {
+            if rule_sign != pres_sign {
+                return false;
+            }
+            if rule_team.is_empty() {
+                is_platform_binary && pres_team.is_empty()
+            } else {
+                rule_team == pres_team
+            }
+        }
+        (
+            BinaryMatch::Windows {
+                publisher: rule_pub,
+                product: rule_prod,
+            },
+            BinaryMatch::Windows {
+                publisher: pres_pub,
+                product: pres_prod,
+            },
+        ) => rule_pub == pres_pub && rule_prod == pres_prod,
+        _ => false,
     }
 }
 
@@ -252,7 +280,7 @@ mod tests {
 
     #[test]
     fn allowlisted_binary_joins_the_zone() {
-        let v = classify_exec(&chrome(), false, &policy());
+        let v = classify_exec(&chrome(), false, false, &policy());
         assert!(v.joins_zone);
         assert_eq!(v.matched, Some(AppId("chrome-work".into())));
     }
@@ -263,7 +291,7 @@ mod tests {
             team_id: "ZZZ".into(),
             signing_id: "com.evil.app".into(),
         };
-        let v = classify_exec(&other, false, &policy());
+        let v = classify_exec(&other, false, false, &policy());
         assert!(!v.joins_zone);
         assert_eq!(v.matched, None);
     }
@@ -274,7 +302,7 @@ mod tests {
             team_id: "ZZZ".into(),
             signing_id: "com.evil.app".into(),
         };
-        let v = classify_exec(&other, true, &policy());
+        let v = classify_exec(&other, false, true, &policy());
         assert!(v.joins_zone, "a child of a supervised process inherits");
         assert_eq!(v.matched, None);
     }
@@ -285,13 +313,13 @@ mod tests {
             team_id: "ABCDE12345".into(),
             signing_id: "com.google.Chrome.evil".into(),
         };
-        assert_eq!(policy().match_app(&fake), None);
-        assert!(!classify_exec(&fake, false, &policy()).joins_zone);
+        assert_eq!(policy().match_app(&fake, false), None);
+        assert!(!classify_exec(&fake, false, false, &policy()).joins_zone);
     }
 
     #[test]
     fn empty_policy_allowlists_nothing() {
-        assert!(!classify_exec(&chrome(), false, &AppPolicy::empty()).joins_zone);
+        assert!(!classify_exec(&chrome(), false, false, &AppPolicy::empty()).joins_zone);
     }
 
     #[test]
@@ -303,7 +331,47 @@ mod tests {
         let apps = AppPolicy {
             allow: vec![AppRule::new(AppId("chrome-work".into()), bin.clone())],
         };
-        assert_eq!(apps.match_app(&bin), Some(&AppId("chrome-work".into())));
+        assert_eq!(apps.match_app(&bin, false), Some(&AppId("chrome-work".into())));
+    }
+
+    fn finder_rule() -> AppPolicy {
+        AppPolicy {
+            allow: vec![AppRule::new(
+                AppId("files-work".into()),
+                BinaryMatch::Macos {
+                    team_id: String::new(),
+                    signing_id: "com.apple.finder".into(),
+                },
+            )],
+        }
+    }
+
+    #[test]
+    fn empty_team_id_matches_apple_platform_binaries() {
+        let presented = BinaryMatch::Macos {
+            team_id: String::new(),
+            signing_id: "com.apple.finder".into(),
+        };
+        assert_eq!(
+            finder_rule().match_app(&presented, true),
+            Some(&AppId("files-work".into()))
+        );
+    }
+
+    #[test]
+    fn empty_team_rule_rejects_non_platform_impostor() {
+        let impostor = BinaryMatch::Macos {
+            team_id: String::new(),
+            signing_id: "com.apple.finder".into(),
+        };
+        assert_eq!(finder_rule().match_app(&impostor, false), None);
+        assert!(!classify_exec(&impostor, false, false, &finder_rule()).joins_zone);
+
+        let developer_impostor = BinaryMatch::Macos {
+            team_id: "EVILCORP99".into(),
+            signing_id: "com.apple.finder".into(),
+        };
+        assert_eq!(finder_rule().match_app(&developer_impostor, true), None);
     }
 
     #[test]
@@ -397,7 +465,6 @@ mod tests {
 
     #[test]
     fn container_kind_missing_in_json_defaults_to_native() {
-        // legacy `home_subdir` key must still deserialize via the serde alias
         let json = r#"{"home_subdir":"legacy","env":[],"namespace_prefix":null,"hive_seed":null,"passthrough_paths":[]}"#;
         let profile: LaunchProfile = serde_json::from_str(json).unwrap();
         assert_eq!(profile.container, ContainerKind::Native);

@@ -164,6 +164,14 @@ through the enclave's tunnel — the network analog of device trust.
 - Offline: work apps with no tunnel should **fail-closed** for network (no direct fallback for
   work flows — that would bypass conditional access), while personal stays online.
 
+> **Implemented (portable):** `Tunnel::is_established()` reports link liveness (the boringtun backend
+> derives it from the last handshake age against WireGuard's 180 s reject window). `SplitRouter`
+> reports a work flow opened while the link is down as `FlowDisposition::HeldOffline` and keeps its
+> egress on `encapsulate` — so the handshake still bootstraps and data queues, but work traffic never
+> falls back to a direct passthrough. Personal flows stay `Direct`, so the underlay/captive-portal
+> path is reachable while the tunnel is down. Portal *detection* (the OS connectivity check + prompt)
+> remains OS-adapter work. `Daemon::network_link_is_up()` surfaces the state.
+
 ---
 
 ## 5. Shared core: the classifier and data plane live here

@@ -14,6 +14,7 @@ pub enum TransportError {
     Frame(FrameError),
     Handshake(&'static str),
     Truncated,
+    LaunchFailed(String),
 }
 
 impl std::fmt::Display for TransportError {
@@ -23,6 +24,7 @@ impl std::fmt::Display for TransportError {
             TransportError::Frame(e) => write!(f, "frame: {e:?}"),
             TransportError::Handshake(m) => write!(f, "handshake: {m}"),
             TransportError::Truncated => write!(f, "peer closed mid-frame"),
+            TransportError::LaunchFailed(e) => f.write_str(e),
         }
     }
 }
@@ -243,6 +245,7 @@ impl LauncherClient {
         self.conn.write(&LauncherRequest::Launch { app_id }).await?;
         match self.conn.read::<LauncherReply>().await? {
             Some(LauncherReply::Launched { pid }) => Ok(pid),
+            Some(LauncherReply::LaunchFailed { error }) => Err(TransportError::LaunchFailed(error)),
             Some(_) => Err(TransportError::Handshake("expected Launched")),
             None => Err(TransportError::Truncated),
         }

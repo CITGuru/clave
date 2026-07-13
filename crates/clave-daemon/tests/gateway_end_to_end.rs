@@ -1,7 +1,3 @@
-//! The full control loop across both crates: a real device [`Daemon`] and a real control-plane
-//! [`Gateway`]. The per-crate suites test each side alone; this proves the two together — enroll,
-//! command, obey, report, verify — end to end.
-
 use std::sync::{Arc, Mutex};
 
 use clave_core::{AuditAction, PolicyBundle, ZoneRegistry};
@@ -106,7 +102,6 @@ async fn a_gateway_wipe_is_obeyed_and_the_resulting_audit_verifies_at_the_gatewa
         "chain opened at seq 1"
     );
 
-    // The gateway commands a remote wipe; the device obeys and audits it.
     let (daemon, spool) = daemon(&tenant);
     daemon.unlock_volume(1).unwrap();
     let wipe = tenant.sign(
@@ -126,7 +121,6 @@ async fn a_gateway_wipe_is_obeyed_and_the_resulting_audit_verifies_at_the_gatewa
     );
     let batch = device_key.sign_batch(entries, head);
 
-    // The gateway verifies that report against the key the device enrolled with.
     let admitted = gw
         .ingest_device_audit(device, &batch)
         .expect("the device's audit verifies at the gateway it enrolled with");
@@ -160,7 +154,6 @@ async fn a_tampered_report_is_rejected_by_the_gateway() {
 
     let (entries, head) = spool.drain();
     let mut batch = device_key.sign_batch(entries, head);
-    // A man-in-the-middle rewrites what the device reported after it was signed.
     assert!(!batch.entries.is_empty());
     batch.entries[0].event = clave_core::AuditEvent::new(
         0,
@@ -196,7 +189,6 @@ async fn a_report_signed_by_the_wrong_device_is_rejected() {
     );
     daemon.apply_gateway_command(&lock, 100).unwrap();
 
-    // A different device signs a report claiming to be from the enrolled one.
     let impostor = DeviceSigningKey::from_seed([0xEE; 32]);
     let (entries, head) = spool.drain();
     let batch = impostor.sign_batch(entries, head);

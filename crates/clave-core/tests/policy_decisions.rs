@@ -331,8 +331,6 @@ fn policy_may_sanction_a_capture_tool() {
     assert_eq!(decide(&other, &zones, &pol, 1).decision, Decision::Deny);
 }
 
-/// An unidentifiable capturer must not slip through as "not a work process, so allow" — it is the
-/// most suspicious case, not the least.
 #[test]
 fn an_unidentified_capturer_is_still_denied() {
     let pol = PolicyBundle::restrictive_default();

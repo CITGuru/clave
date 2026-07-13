@@ -1,17 +1,29 @@
 #![forbid(unsafe_code)]
 
-use clave_core::ZoneRegistry;
+use clave_core::{DnsSteering, ZoneRegistry};
 use clave_platform::{ProcId, Route};
 
 pub mod loopback;
+pub mod provider;
 pub mod router;
 pub mod wireguard;
 
 pub use loopback::LoopbackTunnel;
+pub use provider::{build_egress, EgressSeam, SeamError};
 pub use router::{FlowDisposition, FlowId, Inbound, Outbound, SplitRouter};
+pub use wireguard::GatewayConfig;
 
 pub fn route(proc: &ProcId, zones: &ZoneRegistry, dst_blocked: bool) -> Route {
     clave_core::classify_flow(proc, zones, dst_blocked)
+}
+
+pub fn route_dns(
+    proc: &ProcId,
+    zones: &ZoneRegistry,
+    qname: &str,
+    steering: Option<&DnsSteering>,
+) -> Route {
+    clave_core::classify_dns_flow(proc, zones, qname, steering)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -28,6 +40,9 @@ pub trait Tunnel: Send {
     }
     fn update_timers(&mut self) -> Option<Vec<u8>> {
         None
+    }
+    fn is_established(&self) -> bool {
+        true
     }
 }
 

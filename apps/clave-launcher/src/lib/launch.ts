@@ -9,15 +9,16 @@ export type LaunchInfo = {
 
 export type LaunchResult =
   | { kind: "launched"; pid: number }
-  | { kind: "resolved"; spec: LaunchInfo }
-  | { kind: "failed" };
+  | { kind: "failed"; error: string }
+  | { kind: "no_daemon" };
 
 export async function launchApp(appId: string): Promise<LaunchResult> {
-  const pid = await invoke<number | null>("launch_app", { appId });
-  if (pid != null) return { kind: "launched", pid };
-
-  const spec = await invoke<LaunchInfo | null>("launch_spec", { appId });
-  if (spec) return { kind: "resolved", spec };
-
-  return { kind: "failed" };
+  try {
+    const pid = await invoke<number>("launch_app", { appId });
+    return { kind: "launched", pid };
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    if (msg.includes("daemon not running")) return { kind: "no_daemon" };
+    return { kind: "failed", error: msg };
+  }
 }

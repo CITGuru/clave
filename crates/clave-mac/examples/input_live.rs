@@ -1,12 +1,3 @@
-//! Enumerate real keyboard event taps on this machine via `CGGetEventTapList`.
-//!
-//! Prints the pids holding a keyboard tap and their executables. If you have a text expander,
-//! clipboard manager, or hotkey tool running (or grant this session Input Monitoring and run a
-//! recorder), it shows up here — proving the OS enumeration works end to end.
-//!
-//! ```sh
-//! cargo run -p clave-mac --example input_live
-//! ```
 fn main() {
     let pids = clave_mac::raw_keyboard_taps();
     println!("processes holding a keyboard event tap: {}", pids.len());

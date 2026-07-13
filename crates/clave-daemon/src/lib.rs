@@ -5,8 +5,8 @@ use std::sync::{Arc, Mutex};
 use arc_swap::ArcSwap;
 use clave_core::{
     classify_exec, decide, Action, AppId, AuditAction, AuditEvent, AuditSink, BinaryMatch,
-    ExecVerdict, JoinReason, LaunchSpec, LaunchableApp, PathClass, PolicyBundle, Reason,
-    ResolvedLaunch, UnixTime, Verdict, ZoneRegistry,
+    DnsDecision, ExecVerdict, JoinReason, LaunchSpec, LaunchableApp, PathClass, PolicyBundle,
+    Reason, ResolvedLaunch, UnixTime, Verdict, ZoneRegistry,
 };
 use clave_ipc::{DaemonMsg, LauncherReply, LauncherRequest, ShimMsg};
 use clave_net::{FlowDisposition, FlowId, Inbound, Outbound, SplitRouter, Tunnel};
@@ -124,10 +124,16 @@ impl Daemon {
         proc: ProcId,
         parent: Option<ProcId>,
         binary: &BinaryMatch,
+        is_platform_binary: bool,
         now: UnixTime,
     ) -> ExecVerdict {
         let parent_supervised = parent.is_some_and(|p| self.zones.is_supervised(&p));
-        let verdict = classify_exec(binary, parent_supervised, &self.policy.load().apps);
+        let verdict = classify_exec(
+            binary,
+            is_platform_binary,
+            parent_supervised,
+            &self.policy.load().apps,
+        );
         if verdict.joins_zone {
             let reason = match (&verdict.matched, parent) {
                 (Some(_), _) => JoinReason::AllowList,
@@ -227,12 +233,31 @@ impl Daemon {
         self.platform.network().route(proc, blocked)
     }
 
+    pub fn dns_decision(&self, proc: &ProcId, qname: &str) -> DnsDecision {
+        let policy = self.policy.load();
+        match policy.network.dns_steering() {
+            Some(steering) => clave_core::decide_dns(proc, qname, &self.zones, steering),
+            None => DnsDecision::Personal,
+        }
+    }
+
     pub fn open_flow(&self, id: FlowId, proc: &ProcId, host: &str) -> FlowDisposition {
         let blocked = self.policy.load().network.is_blocked(host);
         self.router
             .lock()
             .unwrap()
             .open_flow(id, proc, &self.zones, blocked)
+    }
+
+    pub fn open_dns_flow(&self, id: FlowId, proc: &ProcId, qname: &str) -> FlowDisposition {
+        let policy = self.policy.load();
+        self.router.lock().unwrap().open_dns_flow(
+            id,
+            proc,
+            &self.zones,
+            qname,
+            policy.network.dns_steering(),
+        )
     }
 
     pub fn flow_outbound(&self, id: FlowId, ip_packet: &[u8]) -> Outbound {
@@ -253,6 +278,10 @@ impl Daemon {
 
     pub fn close_flow(&self, id: FlowId) {
         self.router.lock().unwrap().close_flow(id);
+    }
+
+    pub fn network_link_is_up(&self) -> bool {
+        self.router.lock().unwrap().link_is_up()
     }
 
     pub fn handle_shim_msg(&self, msg: ShimMsg, now: UnixTime) -> Option<DaemonMsg> {
@@ -284,8 +313,13 @@ impl Daemon {
             LauncherRequest::PrepareLaunch { app_id } => LauncherReply::LaunchSpec {
                 spec: self.prepare_launch(&app_id),
             },
-            LauncherRequest::Launch { app_id } => LauncherReply::Launched {
-                pid: self.launch(&app_id, now).ok().map(|l| l.pid),
+            LauncherRequest::Launch { app_id } => match self.launch(&app_id, now) {
+                Ok(launched) => LauncherReply::Launched {
+                    pid: Some(launched.pid),
+                },
+                Err(e) => LauncherReply::LaunchFailed {
+                    error: e.to_string(),
+                },
             },
             LauncherRequest::Enforcement => LauncherReply::Enforcement {
                 caps: self
@@ -458,6 +492,15 @@ fn spawn_contained(spec: &LaunchSpec) -> std::io::Result<LaunchedApp> {
 
     seed_contained_home(spec);
 
+    #[cfg(target_os = "macos")]
+    if std::path::Path::new(&spec.executable)
+        .extension()
+        .and_then(|e| e.to_str())
+        == Some("app")
+    {
+        return spawn_macos_app(spec);
+    }
+
     let program = resolve_program(&spec.executable);
     let mut cmd = Command::new(program);
     cmd.args(&spec.args);
@@ -470,6 +513,48 @@ fn spawn_contained(spec: &LaunchSpec) -> std::io::Result<LaunchedApp> {
 
     let child = cmd.spawn()?;
     let pid = child.id();
+    Ok(LaunchedApp {
+        pid,
+        proc: proc_id_for_pid(pid),
+    })
+}
+
+#[cfg(target_os = "macos")]
+fn spawn_macos_app(spec: &LaunchSpec) -> std::io::Result<LaunchedApp> {
+    use std::process::{Command, Stdio};
+
+    let bundle = &spec.executable;
+    let home = spec
+        .env
+        .iter()
+        .find(|(k, _)| k == "HOME")
+        .map(|(_, v)| v.as_str())
+        .unwrap_or("");
+
+    let mut cmd = Command::new("/usr/bin/open");
+    if bundle.ends_with("Finder.app") && !home.is_empty() {
+        cmd.arg("-n").arg("-a").arg(bundle).arg(home);
+    } else {
+        cmd.arg("-n").arg("-a").arg(bundle);
+        if !spec.args.is_empty() {
+            cmd.arg("--args");
+            cmd.args(&spec.args);
+        }
+    }
+    for (key, value) in &spec.env {
+        cmd.arg("--env").arg(format!("{key}={value}"));
+    }
+    cmd.stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+
+    let child = cmd.spawn()?;
+    let open_pid = child.id();
+    let pid = clave_mac::wait_for_app_pid(
+        std::path::Path::new(bundle),
+        std::time::Duration::from_secs(3),
+    )
+    .unwrap_or(open_pid);
     Ok(LaunchedApp {
         pid,
         proc: proc_id_for_pid(pid),
@@ -588,7 +673,7 @@ pub enum DaemonEvent {
         action: Action,
         reply: tokio::sync::oneshot::Sender<Verdict>,
     },
-    PolicyUpdate(PolicyBundle),
+    PolicyUpdate(Box<PolicyBundle>),
     VolumeUnlock,
     VolumeLock,
     GatewayControl(Box<SignedCommand>),
@@ -612,7 +697,7 @@ impl Daemon {
                     let _ = reply.send(self.decide_action(&action, now));
                 }
                 DaemonEvent::PolicyUpdate(p) => {
-                    let _ = self.update_policy(p);
+                    let _ = self.update_policy(*p);
                 }
                 DaemonEvent::VolumeUnlock => {
                     let _ = self.unlock_volume(now);

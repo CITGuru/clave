@@ -274,11 +274,10 @@ export function FullView({
       if (res.kind === "launched") {
         setRecents((r) => [app, ...r.filter((x) => x.id !== app.id)].slice(0, 12));
         flashToast(`Launched ${app.label} — contained · pid ${res.pid}`);
-      } else if (res.kind === "resolved") {
-        setRecents((r) => [app, ...r.filter((x) => x.id !== app.id)].slice(0, 12));
-        flashToast(`${app.label} resolved — start the daemon to launch contained`);
+      } else if (res.kind === "no_daemon") {
+        flashToast(`Start the daemon to launch ${app.label}`);
       } else {
-        flashToast(`Couldn’t launch ${app.label}`);
+        flashToast(`Couldn't launch ${app.label}: ${res.error}`);
       }
     } catch (e) {
       console.error(e);

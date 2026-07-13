@@ -38,11 +38,6 @@ impl ClipboardBroker for MacClipboard {
 pub struct MacScreen;
 
 impl ScreenGuard for MacScreen {
-    /// macOS cannot exclude a window it does not own from capture: `sharingType` is an instance
-    /// property on your own `NSWindow`, and injecting into the work app to set it is ruled out by
-    /// SIP/library validation (doc 07 §3.2). Reporting `Ok` here would tell the daemon a work
-    /// window was protected when it is fully capturable. What macOS *can* do — notice a capture
-    /// over work content and audit it — is `screen.rs`.
     fn protect_window(&self, _w: WindowId) -> PResult<()> {
         Err(PlatformError::Unsupported)
     }
@@ -80,9 +75,6 @@ impl WindowOverlay for MacOverlay {
 pub struct MacInput;
 
 impl InputGuard for MacInput {
-    /// macOS ships no kernel input filter, so no work app can be given a keystroke channel a
-    /// permitted tapper cannot see (doc 06 §3.1). The adapter monitors and audits taps (`input.rs`)
-    /// but never *protects* input — so this is honestly `false`.
     fn protect_input_enabled(&self) -> bool {
         false
     }
@@ -139,8 +131,6 @@ impl MacPlatform {
         self.overlay.tracked_handle()
     }
 
-    /// Point the volume at a real container. Call before boxing the platform into `Daemon::new`,
-    /// then attach through [`MacPlatform::volume_mac`].
     pub fn configure_volume(
         &mut self,
         container: u128,
@@ -150,8 +140,6 @@ impl MacPlatform {
         self.volume = Arc::new(MacVolumeMount::new(container, bundle_path, custody));
     }
 
-    /// The concrete mount, for the `attach`/`detach` calls the `VolumeMount` trait doesn't expose.
-    /// The `Arc` keeps it reachable after `MacPlatform` is boxed into `Box<dyn Platform>`.
     pub fn volume_mac(&self) -> Arc<MacVolumeMount> {
         Arc::clone(&self.volume)
     }
@@ -175,26 +163,11 @@ fn default_enforcement() -> [(Capability, EnforcementStatus); Capability::COUNT]
     use EnforcementStatus::*;
     [
         (ProcessSupervision, DevelopmentOnly),
-        // Real encryption, hardware key custody, and crypto-shred (volume.rs, se_seal.rs) — but the
-        // mount is not yet ES `AUTH_OPEN`-gated, so `DevelopmentOnly` (doc 04 §4).
         (Volume, DevelopmentOnly),
-        // Monitor + reactive-clear + audit (clipboard.rs). macOS offers no way to intercept a paste,
-        // so this can never reach `Enforced` — it narrows the leak window and records every
-        // work→personal transfer, but a paste inside the poll window still wins (doc 05 §3.3).
         (Clipboard, DevelopmentOnly),
         (Network, DevelopmentOnly),
-        // Detect + audit only (screen.rs). macOS cannot exclude a third-party window from capture
-        // at all (doc 07 §3.2), so this never reaches `Enforced`: it records screenshots taken over
-        // work content, it does not stop them. The one hard block — ES `AUTH_EXEC`-denying
-        // `screencapture` — needs the Endpoint Security entitlement.
         (Screen, DevelopmentOnly),
-        // The Clave Edge border is drawn and running (edge.rs): a CGWindowList poll, needing no TCC
-        // grant. It is a UI affordance, not a control (doc 09 §3.3), so it is never `Enforced` — but
-        // reporting `Unavailable` for something that visibly runs would be the same lie in reverse.
         (Overlay, DevelopmentOnly),
-        // Event taps are enumerated and audited (input.rs). macOS ships no kernel input filter, so
-        // prevention is impossible; TCC's Input Monitoring prompt is the platform's real backstop
-        // (doc 06 §3.3).
         (Input, DevelopmentOnly),
     ]
 }
@@ -275,20 +248,14 @@ mod tests {
             r.status(Capability::Volume),
             EnforcementStatus::DevelopmentOnly
         );
-        // Clipboard is monitored and reactively cleared, but macOS cannot hard-block a paste — it
-        // must never claim `Enforced` (doc 05 §3.3).
         assert_eq!(
             r.status(Capability::Clipboard),
             EnforcementStatus::DevelopmentOnly
         );
-        // Screen capture is detected and audited, never blocked — macOS cannot exclude a window it
-        // does not own from capture, so this must never claim `Enforced` (doc 07 §3.4).
         assert_eq!(
             r.status(Capability::Screen),
             EnforcementStatus::DevelopmentOnly
         );
-        // Overlay and input are detect/draw/audit only — real, running, but never `Enforced`
-        // (the overlay is a UI affordance, input has no shippable kernel filter).
         assert_eq!(
             r.status(Capability::Overlay),
             EnforcementStatus::DevelopmentOnly
@@ -299,8 +266,6 @@ mod tests {
         );
     }
 
-    /// macOS cannot protect a third-party window from capture. Reporting `Ok` would tell the daemon
-    /// the window was protected when it is fully capturable (doc 07 §3.2).
     #[test]
     fn protecting_a_window_from_capture_is_reported_as_unsupported() {
         let p = platform();

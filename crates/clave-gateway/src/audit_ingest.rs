@@ -1,7 +1,3 @@
-//! Gateway-side ingestion of the device audit spool (doc 10 §6): verify each device's
-//! hash-chained, signed batch against the key it enrolled with, so a dropped, rewritten, or forged
-//! report is caught rather than silently accepted.
-
 use std::collections::HashMap;
 use std::sync::Mutex;
 
@@ -10,8 +6,6 @@ use clave_proto::{verify_batch, AuditError, ChainHash, SignedSpoolBatch};
 
 use crate::DeviceId;
 
-/// Why a batch was refused. Nothing is admitted on rejection — the device's chain position is left
-/// untouched so a corrected re-send still verifies.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum IngestError {
     UnknownDevice(DeviceId),
@@ -35,8 +29,6 @@ struct DeviceChain {
     head: ChainHash,
 }
 
-/// Per-device audit verification state, plus the events that passed it. In-memory; a durable sink
-/// (Postgres/SIEM) is a separate concern.
 #[derive(Default)]
 pub struct AuditLedger {
     chains: Mutex<HashMap<DeviceId, DeviceChain>>,
@@ -48,7 +40,6 @@ impl AuditLedger {
         Self::default()
     }
 
-    /// A fresh device's chain starts from genesis expecting seq 1 (the spool's first entry).
     pub fn register_device(&self, device: DeviceId, public_key: [u8; 32]) {
         self.chains.lock().expect("ledger lock").insert(
             device,
@@ -60,9 +51,6 @@ impl AuditLedger {
         );
     }
 
-    /// Verify a batch and admit its events, advancing the chain only on success. A re-sent batch
-    /// (device retrying after a lost ack) fails the sequence check as [`AuditError::Gap`] — "already
-    /// have this", not tampering.
     pub fn ingest(
         &self,
         device: DeviceId,
@@ -87,7 +75,6 @@ impl AuditLedger {
         Ok(events)
     }
 
-    /// The next sequence the gateway expects from `device`; `None` if never registered.
     pub fn high_water(&self, device: DeviceId) -> Option<u64> {
         self.chains
             .lock()
@@ -166,7 +153,7 @@ mod tests {
         let (spool, key, ledger) = device();
 
         spool.emit(event(AuditAction::ClipboardBlocked));
-        let _dropped = batch(&spool, &key); // never delivered
+        let _dropped = batch(&spool, &key);
 
         spool.emit(event(AuditAction::NetworkBlocked));
         let next = batch(&spool, &key);

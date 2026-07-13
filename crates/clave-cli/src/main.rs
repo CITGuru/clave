@@ -121,7 +121,7 @@ fn classify_exec_cmd(args: &[String]) -> Result<String, String> {
         team_id: team.clone(),
         signing_id: signing.clone(),
     };
-    let v = classify_exec(&presented, false, &AppPolicy { allow });
+    let v = classify_exec(&presented, team.is_empty(), false, &AppPolicy { allow });
     Ok(format!(
         "joins_zone={} matched={:?}\n",
         v.joins_zone,

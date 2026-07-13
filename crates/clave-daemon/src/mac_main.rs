@@ -1,7 +1,4 @@
-//! macOS daemon startup, entered from `main.rs` (the unsigned `cargo run` binary) or from
-//! `clave-daemon-host`'s FFI shim (the signed `ClaveDaemonHost.app`). See [`Profile`].
-
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use clave_core::ZoneRegistry;
 use clave_mac::Custody;
@@ -12,20 +9,13 @@ use clave_volume::{ClaveVolume, ContainerId, ContainerMeta, Dek, Kek, MemBacking
 
 use crate::Daemon;
 
-/// Which binary is running the daemon. They differ in one way that matters — whether they can reach
-/// the Secure Enclave — so each owns a **separate Clave Disk**: custody is fixed at container
-/// creation, so a shared container would lock one binary out or silently downgrade the other.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Profile {
-    /// `cargo run -p clave-daemon` — unsigned, so the Secure Enclave is unreachable. Throwaway disk
-    /// with a plain-Keychain passphrase.
     Dev,
-    /// `ClaveDaemonHost.app` — signed and provisioned. Its disk must be Secure-Enclave-sealed.
     SignedHost,
 }
 
 impl Profile {
-    /// Keys the daemon's `ClaveVolume`, the OS mount, and a gateway wipe.
     fn container(self) -> u128 {
         match self {
             Profile::Dev => 0xC1A5_DE11,
@@ -40,7 +30,6 @@ impl Profile {
         }
     }
 
-    /// Distinct bundles and mount points, so the two profiles' disks never collide.
     fn bundle_name(self) -> &'static str {
         match self {
             Profile::Dev => "ClaveDisk-dev.sparsebundle",
@@ -68,8 +57,6 @@ impl Profile {
     }
 }
 
-/// Mount the Clave Disk, report the honest enforcement posture, and serve the launcher over IPC.
-/// Runs until killed.
 pub fn run_macos(profile: Profile) {
     println!("clave-daemon: {}", profile.banner());
 
@@ -119,11 +106,14 @@ pub fn run_macos(profile: Profile) {
 
     let overlay_tracked = platform.overlay_tracked();
 
+    let policy = demo_policy();
+    publish_es_policy(&policy, profile);
+
     let daemon = Arc::new(Daemon::new(
         Arc::clone(&zones),
         Box::new(platform),
         Arc::new(AuditSpool::new()),
-        demo_policy(),
+        policy,
         Box::new(LoopbackTunnel::new(0x5A)),
         Arc::new(Mutex::new(volume)),
         gateway,
@@ -138,9 +128,6 @@ pub fn run_macos(profile: Profile) {
     spawn_screen_watch(Arc::clone(&daemon), Arc::clone(&zones));
     spawn_input_watch(Arc::clone(&daemon), Arc::clone(&zones));
 
-    // The Clave Edge overlay owns the process **main thread** (AppKit is main-thread-only), so the
-    // launcher IPC server runs on a worker thread. `CLAVE_EDGE=0` skips the overlay and serves the
-    // IPC loop directly on the main thread (useful for headless / SSH runs with no window server).
     if std::env::var("CLAVE_EDGE").as_deref() == Ok("0") {
         if let Err(e) = rt.block_on(serve_launcher_loop(daemon)) {
             eprintln!("clave-daemon: launcher IPC server stopped: {e}");
@@ -161,11 +148,6 @@ pub fn run_macos(profile: Profile) {
     clave_mac::run_clave_edge(zones, overlay_tracked, move || cfg_daemon.overlay_cfg());
 }
 
-/// Watch the clipboard for work→personal transfers (doc 05 §3). Every transfer is decided by
-/// `clave-core`'s policy through [`Daemon::decide_action`], which also audits the denials — so the
-/// gateway gets a record even when the reactive clear loses the race to a fast paste.
-///
-/// Its own thread: the guard polls, and the main thread belongs to the Clave Edge overlay.
 fn spawn_clipboard_guard(daemon: Arc<Daemon>, zones: Arc<ZoneRegistry>) {
     std::thread::spawn(move || {
         clave_mac::run_clipboard_guard(zones, move |src, dst, fmt| {
@@ -179,16 +161,11 @@ fn spawn_clipboard_guard(daemon: Arc<Daemon>, zones: Arc<ZoneRegistry>) {
     });
 }
 
-/// Watch for screenshots taken over work content (doc 07 §3). macOS cannot stop them — it cannot
-/// exclude a window it does not own from capture — so this records them: the policy decision runs
-/// through [`Daemon::decide_action`], which audits every denial for the gateway.
 fn spawn_screen_watch(daemon: Arc<Daemon>, zones: Arc<ZoneRegistry>) {
     std::thread::spawn(move || {
         clave_mac::run_screen_watch(zones, move |capturer| {
             let verdict = daemon.decide_action(
                 &clave_core::Action::ScreenCapture {
-                    // Identified, so the core can tell a work app capturing its own zone (in-bounds)
-                    // from anything else.
                     proc: Some(crate::proc_id_for_pid(capturer.pid)),
                     exe: capturer.exe.clone(),
                 },
@@ -205,9 +182,6 @@ fn spawn_screen_watch(daemon: Arc<Daemon>, zones: Arc<ZoneRegistry>) {
     });
 }
 
-/// Watch for non-work processes reading the keyboard while a work app is focused (doc 06 §3). macOS
-/// ships no kernel input filter, so this records — it does not block — through
-/// [`Daemon::decide_action`], which audits every denial.
 fn spawn_input_watch(daemon: Arc<Daemon>, zones: Arc<ZoneRegistry>) {
     std::thread::spawn(move || {
         clave_mac::run_input_watch(zones, move |tapper| {
@@ -229,8 +203,6 @@ fn spawn_input_watch(daemon: Arc<Daemon>, zones: Arc<ZoneRegistry>) {
     });
 }
 
-/// Accept launcher connections forever, serving each over the `clave-ipc` launcher protocol against
-/// the daemon's read-only launcher view (catalog / launch spec / enforcement posture).
 async fn serve_launcher_loop(daemon: Arc<Daemon>) -> Result<(), Box<dyn std::error::Error>> {
     use clave_ipc::transport::{serve_launcher, IpcServer};
 
@@ -251,7 +223,6 @@ async fn serve_launcher_loop(daemon: Arc<Daemon>) -> Result<(), Box<dyn std::err
     }
 }
 
-/// Wall-clock seconds since the Unix epoch, for audit timestamps in a live run.
 fn unix_now() -> clave_core::UnixTime {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -259,8 +230,6 @@ fn unix_now() -> clave_core::UnixTime {
         .unwrap_or(0)
 }
 
-/// The launcher socket path, matching the launcher UI: `$CLAVE_LAUNCHER_SOCK`, else
-/// `<temp>/clave-launcher.sock`.
 fn socket_path() -> std::path::PathBuf {
     if let Ok(p) = std::env::var("CLAVE_LAUNCHER_SOCK") {
         return std::path::PathBuf::from(p);
@@ -270,16 +239,71 @@ fn socket_path() -> std::path::PathBuf {
     p
 }
 
-/// Where the `hdiutil`-mounted Clave Disk appears: `$CLAVE_DEV_MOUNT`, else the profile's default.
-/// The signed host's `/Volumes/ClaveDisk` is the production path (doc 04 §4) and is what the ES
-/// `AUTH_OPEN` client checks against (`macos/ClaveESExtension/main.swift`'s `claveDiskPrefix`).
 fn mount_point(profile: Profile) -> String {
     std::env::var("CLAVE_DEV_MOUNT").unwrap_or_else(|_| profile.default_mount_point().to_string())
 }
 
-/// Where the encrypted sparsebundle container itself lives (the opaque blob "on personal disk" in
-/// doc 04's diagram — distinct from the mount point above): `$CLAVE_DISK_BUNDLE`, else a stable
-/// per-user Application Support path, named per profile so the two never share a container.
+pub type PolicyPublisher = Arc<dyn Fn(&[u8]) -> bool + Send + Sync>;
+
+static POLICY_PUBLISHER: OnceLock<Mutex<Option<PolicyPublisher>>> = OnceLock::new();
+
+fn policy_publisher() -> &'static Mutex<Option<PolicyPublisher>> {
+    POLICY_PUBLISHER.get_or_init(|| Mutex::new(None))
+}
+
+pub fn register_policy_publisher(publisher: PolicyPublisher) {
+    *policy_publisher()
+        .lock()
+        .expect("policy publisher lock poisoned") = Some(publisher);
+}
+
+fn publish_es_policy(policy: &clave_core::PolicyBundle, profile: Profile) {
+    let mount = mount_point(profile);
+    clave_mac::set_mount_prefix(&mount);
+
+    let json = match serde_json::to_string_pretty(policy) {
+        Ok(json) => json,
+        Err(e) => {
+            eprintln!("clave-daemon: failed to serialize ES policy: {e}");
+            return;
+        }
+    };
+
+    let publisher = policy_publisher()
+        .lock()
+        .expect("policy publisher lock poisoned")
+        .clone();
+    if let Some(publisher) = publisher {
+        if publisher(json.as_bytes()) {
+            println!("clave-daemon: ES policy pushed to the ES client over XPC (mount {mount})");
+        } else {
+            eprintln!("clave-daemon: ES policy XPC push failed");
+        }
+        return;
+    }
+
+    write_es_policy_file(&json, &mount);
+}
+
+fn write_es_policy_file(json: &str, mount: &str) {
+    use std::path::PathBuf;
+
+    let path = std::env::var("CLAVE_POLICY_JSON")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| PathBuf::from("/Users/Shared/Clave/policy.json"));
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    if let Err(e) = std::fs::write(&path, json) {
+        eprintln!("clave-daemon: failed to write ES policy snapshot: {e}");
+    } else {
+        println!(
+            "clave-daemon: ES policy snapshot → {} (mount {mount})",
+            path.display()
+        );
+    }
+}
+
 fn disk_bundle_path(profile: Profile) -> std::path::PathBuf {
     if let Ok(p) = std::env::var("CLAVE_DISK_BUNDLE") {
         return std::path::PathBuf::from(p);
@@ -291,8 +315,6 @@ fn disk_bundle_path(profile: Profile) -> std::path::PathBuf {
         .join(profile.bundle_name())
 }
 
-/// A stand-in for the tenant-signed policy the gateway would supply — a representative set of
-/// allow-listed work apps so the launcher grid is populated in a lab build.
 fn demo_policy() -> clave_core::PolicyBundle {
     use clave_core::{AppId, AppPolicy, AppRule, BinaryMatch, LaunchProfile, PolicyBundle};
 
@@ -308,13 +330,22 @@ fn demo_policy() -> clave_core::PolicyBundle {
         .with_executable(exec)
     }
 
-    // Chromium/Electron apps hand a second launch off to the user's personal instance, so launch
-    // them with a private --user-data-dir: contained profile + a window we supervise (and frame).
+    fn apple_app(id: &str, signing: &str, name: &str, exec: &str) -> AppRule {
+        AppRule::new(
+            AppId(id.into()),
+            BinaryMatch::Macos {
+                team_id: String::new(),
+                signing_id: signing.into(),
+            },
+        )
+        .with_display_name(name)
+        .with_executable(exec)
+    }
+
     fn chromium_app(id: &str, signing: &str, name: &str, exec: &str) -> AppRule {
         app(id, signing, name, exec).with_launch(LaunchProfile::chromium())
     }
 
-    // Editors spawn login shells; seed shell config + toolchains so rc files don't error and PATH works.
     fn editor_app(id: &str, signing: &str, name: &str, exec: &str) -> AppRule {
         app(id, signing, name, exec).with_launch(LaunchProfile::chromium().with_seed_home([
             ".zshenv",
@@ -359,7 +390,7 @@ fn demo_policy() -> clave_core::PolicyBundle {
                 "Outlook",
                 "/Applications/Microsoft Outlook.app",
             ),
-            app(
+            apple_app(
                 "files-work",
                 "com.apple.finder",
                 "Files",
@@ -419,15 +450,13 @@ fn demo_policy() -> clave_core::PolicyBundle {
                 "Cursor",
                 "/Applications/Cursor.app",
             ),
-            // Stock macOS apps that are always present, so a live "Launch" actually spawns and
-            // supervises a real, visible window in a lab build.
-            app(
+            apple_app(
                 "calculator-work",
                 "com.apple.calculator",
                 "Calculator",
                 "/System/Applications/Calculator.app",
             ),
-            app(
+            apple_app(
                 "textedit-work",
                 "com.apple.TextEdit",
                 "TextEdit",

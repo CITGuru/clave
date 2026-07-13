@@ -1,22 +1,3 @@
-//! Seal the Clave Disk passphrase to a **Secure-Enclave-resident** key (doc 04 §4.1).
-//!
-//! The Secure Enclave only supports **P-256**, so this is a P-256 ECIES sealed-box — the same shape
-//! as `clave_volume::seal`'s enrollment box, a different curve:
-//!
-//! ```text
-//! seal:  ephemeral P-256 keypair (software, one-shot)   (e_sk, e_pk)
-//!        shared = ECDH(e_sk, se_pub)
-//!        KEK    = SHA-256(ctx ++ e_pk ++ se_pub ++ shared)
-//!        out    = (e_pk, AES-KW(KEK, passphrase))
-//! open:  shared = ECDH(se_sk, e_pk)                      — runs *inside* the Secure Enclave
-//!        KEK    = SHA-256(ctx ++ e_pk ++ se_pub ++ shared)
-//!        passphrase = AES-KW^-1(KEK, wrapped)
-//! ```
-//!
-//! `se_sk` never leaves the chip: [`open`] recovers the passphrase only by asking the SE to perform
-//! the ECDH itself, so a copied Keychain database is useless without this device. The SE key is
-//! persisted under a fixed label and reused — regenerating it would orphan every sealed passphrase.
-
 use core_foundation::base::TCFType;
 use core_foundation::data::CFData;
 use core_foundation::dictionary::CFDictionary;
@@ -38,34 +19,23 @@ use zeroize::Zeroizing;
 use aes::cipher::generic_array::GenericArray;
 use aes_kw::KekAes256;
 
-/// The sparsebundle passphrase: 64 ASCII hex chars (32 bytes of entropy). Zeroized on drop
-/// wherever it is held — it is the volume key in all but name (doc 04 §7).
 pub type Passphrase = Zeroizing<[u8; 64]>;
 
 const SE_KEY_LABEL: &str = "com.clave.volume.se-sealing-key";
 const SEAL_KDF_CONTEXT: &[u8] = b"clave-mac/se-seal/v1";
-/// P-256 uncompressed point (X9.63): `0x04 || X(32) || Y(32)`.
 const P256_PUBLIC_LEN: usize = 65;
-/// AES-KW adds an 8-byte integrity check value to the wrapped payload.
 const WRAPPED_LEN: usize = 64 + 8;
-/// `ephemeral_pub || wrapped` — fixed-length, no framing needed.
 pub const SEALED_LEN: usize = P256_PUBLIC_LEN + WRAPPED_LEN;
 
 fn sec_err(context: &str, e: impl std::fmt::Display) -> io::Error {
     io::Error::other(format!("{context}: {e}"))
 }
 
-/// The device's Secure-Enclave-resident P-256 sealing key. The private half never leaves the
-/// chip; only [`SeSealingKey::open`] (which routes through `SecKeyCopyKeyExchangeResult`) can
-/// recover what was sealed to it.
 pub struct SeSealingKey {
     key: SecKey,
 }
 
 impl SeSealingKey {
-    /// Look up the persisted SE key, or `None` if this device has never had one. Use this — not
-    /// [`SeSealingKey::load_or_generate`] — wherever a sealed blob already exists: only the
-    /// provisioning path may mint a key, since a new one orphans every blob sealed to the old.
     pub fn load() -> io::Result<Option<Self>> {
         let mut opts = ItemSearchOptions::new();
         opts.class(ItemClass::key())
@@ -80,15 +50,11 @@ impl SeSealingKey {
                 }
                 _ => None,
             })),
-            // Only "no such item" means no key yet. Any other failure (keychain locked, missing
-            // entitlement, …) must propagate — reporting it as "absent" sends the caller down the
-            // generate path, orphaning every sealed passphrase.
             Err(e) if e.code() == errSecItemNotFound => Ok(None),
             Err(e) => Err(sec_err("search for SE key", e)),
         }
     }
 
-    /// Load the persisted SE key, generating and persisting one on first use.
     pub fn load_or_generate() -> io::Result<Self> {
         if let Some(key) = Self::load()? {
             return Ok(key);
@@ -102,7 +68,6 @@ impl SeSealingKey {
         Ok(Self { key })
     }
 
-    /// The raw X9.63 uncompressed public key bytes, for [`seal`].
     pub fn public_key_bytes(&self) -> io::Result<Vec<u8>> {
         let public = self
             .key
@@ -114,7 +79,6 @@ impl SeSealingKey {
             .ok_or_else(|| io::Error::other("failed to export SE public key"))
     }
 
-    /// ECDH with `peer_pub` — for a Secure Enclave key this runs *inside the chip*.
     fn key_exchange(&self, peer_pub: &[u8]) -> io::Result<Zeroizing<Vec<u8>>> {
         let peer_key = import_p256_public_key(peer_pub)?;
         self.key
@@ -124,10 +88,6 @@ impl SeSealingKey {
     }
 }
 
-/// Import raw X9.63 uncompressed P-256 public key bytes as a `SecKey`, via the raw
-/// `SecKeyCreateWithData` FFI call — `security-framework` has no safe wrapper for this import
-/// direction (only for generating/holding keys), so this mirrors the crate's own dictionary-
-/// building pattern (see `GenerateKeyOptions::to_dictionary`) at the FFI boundary.
 fn import_p256_public_key(raw: &[u8]) -> io::Result<SecKey> {
     if raw.len() != P256_PUBLIC_LEN {
         return Err(io::Error::other(format!(
@@ -151,9 +111,6 @@ fn import_p256_public_key(raw: &[u8]) -> io::Result<SecKey> {
     ]);
     let data = CFData::from_buffer(raw);
     let mut error = std::ptr::null_mut();
-    // SAFETY: `data`/`attrs` are valid, live CF objects for the duration of the call; `error` is
-    // a valid out-param. `SecKeyCreateWithData` follows the standard CF create-rule (owned
-    // return), matched by `wrap_under_create_rule` below.
     let key_ref = unsafe {
         SecKeyCreateWithData(
             data.as_concrete_TypeRef(),
@@ -162,12 +119,9 @@ fn import_p256_public_key(raw: &[u8]) -> io::Result<SecKey> {
         )
     };
     if key_ref.is_null() {
-        // SAFETY: non-null `error` on a null return, per `SecKeyCreateWithData`'s documented
-        // create-rule error contract.
         let e = unsafe { core_foundation::error::CFError::wrap_under_create_rule(error) };
         return Err(sec_err("import peer public key", e));
     }
-    // SAFETY: non-null owned SecKeyRef from the create-rule call above.
     Ok(unsafe { SecKey::wrap_under_create_rule(key_ref) })
 }
 
@@ -199,9 +153,6 @@ fn aes_kw_unwrap(kek: &[u8; 32], wrapped: &[u8; WRAPPED_LEN]) -> io::Result<Pass
     Ok(out)
 }
 
-/// Seal `secret` (the sparsebundle passphrase, see `volume.rs`) to the device's SE public key.
-/// `se_pub` is [`SeSealingKey::public_key_bytes`] — sealing needs only the public half, so this
-/// side never touches the Secure Enclave.
 pub fn seal(se_pub: &[u8], secret: &Passphrase) -> io::Result<[u8; SEALED_LEN]> {
     let mut ephemeral_opts = GenerateKeyOptions::default();
     ephemeral_opts
@@ -229,8 +180,6 @@ pub fn seal(se_pub: &[u8], secret: &Passphrase) -> io::Result<[u8; SEALED_LEN]> 
     Ok(out)
 }
 
-/// Open a blob produced by [`seal`], recovering the passphrase. Routes the ECDH through the
-/// Secure Enclave — fails if `se_key` isn't the one `seal` targeted.
 pub fn open(se_key: &SeSealingKey, sealed: &[u8; SEALED_LEN]) -> io::Result<Passphrase> {
     let ephemeral_pub = &sealed[..P256_PUBLIC_LEN];
     let mut wrapped = [0u8; WRAPPED_LEN];
@@ -246,11 +195,6 @@ pub fn open(se_key: &SeSealingKey, sealed: &[u8; SEALED_LEN]) -> io::Result<Pass
 mod tests {
     use super::*;
 
-    /// Persisting an SE key needs the `keychain-access-groups` entitlement + a real provisioning
-    /// profile (doc 04 §4.1) — only present when this binary is the signed `ClaveDaemonHost` app
-    /// (`crates/clave-mac/macos/`), never a bare `cargo test` run. Skip rather than fail there: this
-    /// is an environment gap, not a bug, and `volume.rs`'s own tests already prove the fallback path
-    /// these tests can't reach.
     fn se_key_or_skip() -> Option<SeSealingKey> {
         match SeSealingKey::load_or_generate() {
             Ok(k) => Some(k),
@@ -298,8 +242,6 @@ mod tests {
             return;
         };
         let first_pub = first.public_key_bytes().expect("pub 1");
-        // `load`, not `load_or_generate`: proves the key is genuinely persisted and found, rather
-        // than a fresh one being minted (which would orphan every sealed passphrase).
         let second = SeSealingKey::load()
             .expect("search succeeds")
             .expect("the key persisted by the first load must be found");
@@ -315,7 +257,6 @@ mod tests {
         let Some(se) = se_key_or_skip() else { return };
         let se_pub = se.public_key_bytes().expect("SE public key");
         let mut sealed = seal(&se_pub, &Zeroizing::new([0x22u8; 64])).expect("seal");
-        // Flip a byte in the wrapped payload — AES-KW's integrity check must reject it.
         sealed[SEALED_LEN - 1] ^= 0xFF;
         assert!(open(&se, &sealed).is_err());
     }
