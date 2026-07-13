@@ -9,11 +9,7 @@
 | `ClaveDaemonHost` | `libclave_daemon_host.a` | The only build that can reach the **Secure Enclave** (`keychain-access-groups`). Runs the real daemon. |
 | `ClaveESExtension` | `libclave_mac.a` | The Endpoint Security client. |
 
-**`cargo build` does not update these app bundles.** The `.a` is baked in at Xcode build
-time, so after changing any Rust that either target links — `clave-daemon`,
-`clave-daemon-host`, `clave-mac`, or anything they depend on (`clave-core`, `clave-volume`,
-`clave-platform`, `clave-ipc`, `clave-net`, `clave-proto`) — rebuild before running or
-testing them, or you are exercising **stale code**:
+**`cargo build` does not update these app bundles.** The `.a` is baked in at Xcode build time, so after changing any Rust that either target links — `clave-daemon`,`clave-daemon-host`, `clave-mac`, or anything they depend on (`clave-core`, `clave-volume`, `clave-platform`, `clave-ipc`, `clave-net`, `clave-proto`) — rebuild before running or testing them, or you are exercising **stale code**:
 
 ```sh
 cd crates/clave-mac/macos
