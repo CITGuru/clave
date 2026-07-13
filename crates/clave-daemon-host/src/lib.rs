@@ -1,19 +1,11 @@
-//! The `#[no_mangle]` boundary between the signed `ClaveDaemonHost` macOS app
-//! (`crates/clave-mac/macos/ClaveDaemonHost`) and `clave-daemon`'s mac startup
-//! (`clave_daemon::mac_main::run_macos`).
+//! The `#[no_mangle]` boundary the signed `ClaveDaemonHost` app links to reach the daemon.
 //!
-//! This exists as its own crate — not a module inside `clave-daemon` — because `clave-daemon`
-//! carries `#![forbid(unsafe_code)]` and `#[no_mangle]` itself trips that lint (unmangled exported
-//! symbols are an unsafe-code category: the linker gives no guarantee against a colliding symbol
-//! from elsewhere). Keeping the FFI export here, not there, means the policy-brain-adjacent
-//! `clave-daemon` code keeps its forbid; this crate is the one, tiny, intentional OS-adapter
-//! boundary that needs it — the same split `clave-mac` already draws between its safe core and its
-//! `unsafe extern "C"` C ABI.
+//! Its own crate, not a module in `clave-daemon`: that crate carries `#![forbid(unsafe_code)]`, and
+//! `#[no_mangle]` trips it. Keeping the export here confines the unsafety to an OS-adapter boundary,
+//! as `clave-mac` already does for its C ABI.
 
 #[cfg(target_os = "macos")]
 #[no_mangle]
 pub extern "C" fn clave_daemon_run() {
-    // The signed, provisioned host: the only build that can reach the Secure Enclave, so it runs
-    // the real, hardware-sealed Clave Disk.
     clave_daemon::mac_main::run_macos(clave_daemon::mac_main::Profile::SignedHost);
 }

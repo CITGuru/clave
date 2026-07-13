@@ -77,6 +77,17 @@ cargo run -p clave-cli -- apps policy.json   # launcher catalog from a policy bu
 cd apps/clave-launcher && npm install && npm run tauri dev
 ```
 
+On macOS the daemon runs under one of two profiles, each with its own Clave Disk. `cargo run` is
+the unsigned **dev** profile (plain-Keychain disk). The **signed host** — the only build that can
+reach the Secure Enclave — is an Xcode target:
+
+```sh
+cd crates/clave-mac/macos
+xcodebuild -project ClaveES.xcodeproj -scheme ClaveDaemonHost \
+  -configuration Release -derivedDataPath build -allowProvisioningUpdates build
+open build/Build/Products/Release/ClaveDaemonHost.app
+```
+
 
 
 ### Feature-gated pieces

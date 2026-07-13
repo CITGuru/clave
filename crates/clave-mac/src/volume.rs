@@ -10,11 +10,9 @@ use crate::se_seal::{Passphrase, SEALED_LEN};
 
 const KEYCHAIN_SERVICE: &str = "com.clave.volume";
 
-/// Maximum size of the Clave Disk sparsebundle. A sparsebundle is thin-provisioned — its bands are
-/// allocated lazily as data is written — so this only *caps* growth; it does not reserve the space
-/// up front (the on-disk blob stays as small as the data in it). Real work apps write gigabytes of
-/// profile/cache into their contained HOME (Chromium/Electron `--user-data-dir`, Office caches), so
-/// the cap has to be roomy: the previous 32 MiB filled instantly and every launched app died with
+/// Caps the Clave Disk's growth; does not reserve space (a sparsebundle allocates bands lazily, so
+/// the blob stays as small as the data in it). Roomy because work apps write gigabytes of
+/// profile/cache into their contained HOME — too small a cap and every launched app dies with
 /// `ENOSPC`. Override with `CLAVE_DISK_SIZE_MB`.
 const DEFAULT_SIZE_MB: u64 = 65_536;
 const MIN_SIZE_MB: u64 = 512;
@@ -27,10 +25,8 @@ fn configured_size_mb() -> u64 {
         .max(MIN_SIZE_MB)
 }
 
-/// A container's passphrase lives under exactly **one** Keychain account, whatever its custody
-/// form. Two accounts (one per form) would let each launch path mint its own passphrase for the
-/// same container — and since a container is only created once, whichever path ran second would
-/// hold a passphrase that can never open the existing bundle.
+/// One account per container, whatever its custody form — a container has exactly one passphrase,
+/// so it must have exactly one record of it.
 fn key_account(container: u128) -> String {
     format!("sparsebundle-key-{container:032x}")
 }
@@ -314,16 +310,14 @@ impl MacVolumeMount {
 
     /// Mount the Clave Disk, creating the container on first use.
     ///
-    /// Creating and opening are strictly separate: a container is only ever created alongside the
-    /// passphrase that was minted for it, and an *existing* container is only ever opened with the
-    /// passphrase the Keychain already holds for it ([`passphrase_for_existing`] fails closed
-    /// rather than minting). Collapsing the two — minting a passphrase and then skipping creation
-    /// because the container already existed — silently wedges the disk: the new passphrase cannot
-    /// open the old container, and the old one has been overwritten.
+    /// Creating and opening stay strictly separate: a container is created only alongside the
+    /// passphrase minted for it, and an existing one is opened only with the passphrase the
+    /// Keychain already holds ([`passphrase_for_existing`] fails closed rather than minting).
+    /// Minting for a container that already exists yields a passphrase that cannot decrypt it,
+    /// while overwriting the one that could.
     ///
-    /// Idempotent: if `mount_point` is already a live volume — including one left mounted by a
-    /// previous process, so this instance's own `mount_point` starts `None` — adopt it rather than
-    /// re-running `hdiutil`, which would fail with "mount point busy".
+    /// Idempotent: a `mount_point` that is already a live volume (possibly from another process, so
+    /// this instance's `mount_point` starts `None`) is adopted rather than re-attached.
     pub fn attach(&self, mount_point: impl Into<PathBuf>) -> PResult<()> {
         let mount_point = mount_point.into();
         if is_attached(&mount_point) {
@@ -492,10 +486,9 @@ mod tests {
         t.vol.detach().expect("final detach");
     }
 
-    /// Regression: a *second* mount object over an already-provisioned container must open it with
-    /// the stored passphrase, never mint a fresh one. Minting here is what silently wedged the disk
-    /// when the signed host and an unsigned `cargo run` each kept their own passphrase: whichever
-    /// ran second minted a passphrase that could not open the container that already existed.
+    /// A second mount over an already-provisioned container must open it with the stored
+    /// passphrase, never mint a fresh one — a minted passphrase cannot decrypt what is already
+    /// there, and storing it destroys the one that could.
     #[test]
     fn reopening_an_existing_container_reuses_its_stored_passphrase() {
         let t = TestVolume::new("reopen");

@@ -131,10 +131,8 @@ impl MacPlatform {
         self.overlay.tracked_handle()
     }
 
-    /// Point the volume at a real container/bundle target, replacing the unconfigured default. A
-    /// lab `main.rs` calls this before boxing the platform into `Daemon::new`, then attaches
-    /// through the handle returned by [`MacPlatform::volume_mac`] (grabbed *before* boxing — the
-    /// `Arc` mirrors `overlay_tracked`'s pattern so the concrete mount stays reachable afterward).
+    /// Point the volume at a real container. Call before boxing the platform into `Daemon::new`,
+    /// then attach through [`MacPlatform::volume_mac`].
     pub fn configure_volume(
         &mut self,
         container: u128,
@@ -144,9 +142,8 @@ impl MacPlatform {
         self.volume = Arc::new(MacVolumeMount::new(container, bundle_path, custody));
     }
 
-    /// The concrete mount, for the mac-specific `attach`/`detach`/`container_id` calls the
-    /// `VolumeMount` trait doesn't expose. Cloning the `Arc` keeps it reachable after `MacPlatform`
-    /// is boxed into `Box<dyn Platform>`.
+    /// The concrete mount, for the `attach`/`detach` calls the `VolumeMount` trait doesn't expose.
+    /// The `Arc` keeps it reachable after `MacPlatform` is boxed into `Box<dyn Platform>`.
     pub fn volume_mac(&self) -> Arc<MacVolumeMount> {
         Arc::clone(&self.volume)
     }
@@ -170,10 +167,8 @@ fn default_enforcement() -> [(Capability, EnforcementStatus); Capability::COUNT]
     use EnforcementStatus::*;
     [
         (ProcessSupervision, DevelopmentOnly),
-        // Real hdiutil AES-256 sparsebundle, Secure-Enclave-sealed passphrase on the signed launch
-        // path (volume.rs + se_seal.rs) — genuine OS-native encryption, hardware key custody, and
-        // crypto-shred, but not yet ES `AUTH_OPEN`-gated, so `DevelopmentOnly` not `Enforced`
-        // (doc 04 §4).
+        // Real encryption, hardware key custody, and crypto-shred (volume.rs, se_seal.rs) — but the
+        // mount is not yet ES `AUTH_OPEN`-gated, so `DevelopmentOnly` (doc 04 §4).
         (Volume, DevelopmentOnly),
         (Clipboard, Unavailable),
         (Network, DevelopmentOnly),

@@ -1,8 +1,5 @@
-//! macOS daemon startup — callable from two entry points: the plain `[[bin]]` (`main.rs`, fast
-//! unsigned dev iteration; falls back to a plain-Keychain Clave Disk passphrase since AMFI blocks
-//! an unsigned binary from the Secure Enclave) and `clave-daemon-host`'s `#[no_mangle]` FFI shim,
-//! which `crates/clave-mac/macos/ClaveDaemonHost` links and calls — the properly signed, real-App-ID
-//! host that can actually touch the SE-sealed passphrase (`clave-mac`'s `se_seal.rs`).
+//! macOS daemon startup, entered from `main.rs` (the unsigned `cargo run` binary) or from
+//! `clave-daemon-host`'s FFI shim (the signed `ClaveDaemonHost.app`). See [`Profile`].
 
 use std::sync::{Arc, Mutex};
 
@@ -15,23 +12,20 @@ use clave_volume::{ClaveVolume, ContainerId, ContainerMeta, Dek, Kek, MemBacking
 
 use crate::Daemon;
 
-/// Which binary is running the daemon. The two differ in exactly one way that matters — whether
-/// they can reach the Secure Enclave — so they get **separate Clave Disks**. Sharing one container
-/// would mean whichever binary created it fixed its key custody, and the other would either be
-/// locked out (sealed disk, unsigned binary) or silently working against a software-only disk.
+/// Which binary is running the daemon. They differ in one way that matters — whether they can reach
+/// the Secure Enclave — so each owns a **separate Clave Disk**: custody is fixed at container
+/// creation, so a shared container would lock one binary out or silently downgrade the other.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Profile {
-    /// `cargo run -p clave-daemon` — unsigned, no `keychain-access-groups` entitlement, so the
-    /// Secure Enclave is unreachable. Gets its own throwaway disk with a plain-Keychain passphrase.
+    /// `cargo run -p clave-daemon` — unsigned, so the Secure Enclave is unreachable. Throwaway disk
+    /// with a plain-Keychain passphrase.
     Dev,
-    /// `ClaveDaemonHost.app` — signed and provisioned. The real path: its disk must be
-    /// Secure-Enclave-sealed, and it refuses to run rather than provision a software-only one.
+    /// `ClaveDaemonHost.app` — signed and provisioned. Its disk must be Secure-Enclave-sealed.
     SignedHost,
 }
 
 impl Profile {
-    /// Distinct container ids: the daemon's in-memory `ClaveVolume` and the real OS mount are keyed
-    /// by this, and a gateway wipe targets it.
+    /// Keys the daemon's `ClaveVolume`, the OS mount, and a gateway wipe.
     fn container(self) -> u128 {
         match self {
             Profile::Dev => 0xC1A5_DE11,
@@ -74,10 +68,8 @@ impl Profile {
     }
 }
 
-/// Construct the real adapter, print what it actually enforces vs a development-only stand-in or
-/// unavailable, then serve the launcher UI over the authenticated Unix-socket IPC. Runs forever
-/// (or until `CLAVE_EDGE=0`, which returns after the IPC loop stops) — never expected to return
-/// under normal operation.
+/// Mount the Clave Disk, report the honest enforcement posture, and serve the launcher over IPC.
+/// Runs until killed.
 pub fn run_macos(profile: Profile) {
     println!("clave-daemon: {}", profile.banner());
 

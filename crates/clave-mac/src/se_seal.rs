@@ -1,14 +1,11 @@
-//! Seal the Clave Disk passphrase to a **Secure-Enclave-resident** key (doc 04 §4.1's
-//! `kSecAttrTokenIDSecureEnclave` / `SecAccessControlCreateWithFlags` direction), replacing
-//! `volume.rs`'s previous plain-Keychain-stored passphrase.
+//! Seal the Clave Disk passphrase to a **Secure-Enclave-resident** key (doc 04 §4.1).
 //!
-//! The Secure Enclave only supports **P-256** EC keys (not the X25519 `clave_volume::seal` already
-//! uses for the gateway→device enrollment sealed-box — SE hardware has no X25519 support). So this
-//! is a parallel, P-256-flavored construction, same ECIES/sealed-box *shape*, different curve:
+//! The Secure Enclave only supports **P-256**, so this is a P-256 ECIES sealed-box — the same shape
+//! as `clave_volume::seal`'s enrollment box, a different curve:
 //!
 //! ```text
 //! seal:  ephemeral P-256 keypair (software, one-shot)   (e_sk, e_pk)
-//!        shared = ECDH(e_sk, se_pub)                     — software side of the exchange
+//!        shared = ECDH(e_sk, se_pub)
 //!        KEK    = SHA-256(ctx ++ e_pk ++ se_pub ++ shared)
 //!        out    = (e_pk, AES-KW(KEK, passphrase))
 //! open:  shared = ECDH(se_sk, e_pk)                      — runs *inside* the Secure Enclave
@@ -16,11 +13,9 @@
 //!        passphrase = AES-KW^-1(KEK, wrapped)
 //! ```
 //!
-//! `se_sk` (the Secure Enclave private key) never leaves the chip and is not exportable —
-//! [`open`] only works by asking the SE to perform the ECDH itself (`SecKeyCopyKeyExchangeResult`),
-//! so a copied Keychain database file is useless without this specific device's SE. The SE key is
-//! generated once and persisted in the `DataProtectionKeychain` under a fixed label; later runs
-//! look it up instead of regenerating (regenerating would orphan every already-sealed passphrase).
+//! `se_sk` never leaves the chip: [`open`] recovers the passphrase only by asking the SE to perform
+//! the ECDH itself, so a copied Keychain database is useless without this device. The SE key is
+//! persisted under a fixed label and reused — regenerating it would orphan every sealed passphrase.
 
 use core_foundation::base::TCFType;
 use core_foundation::data::CFData;
@@ -68,11 +63,9 @@ pub struct SeSealingKey {
 }
 
 impl SeSealingKey {
-    /// Look up the persisted SE key by its fixed label, or `None` if this device has never had one.
-    ///
-    /// Use this — not [`SeSealingKey::load_or_generate`] — when a sealed blob already exists:
-    /// generating a fresh key there would silently orphan it (the old blob becomes unopenable
-    /// forever). Only the provisioning path may generate.
+    /// Look up the persisted SE key, or `None` if this device has never had one. Use this — not
+    /// [`SeSealingKey::load_or_generate`] — wherever a sealed blob already exists: only the
+    /// provisioning path may mint a key, since a new one orphans every blob sealed to the old.
     pub fn load() -> io::Result<Option<Self>> {
         let mut opts = ItemSearchOptions::new();
         opts.class(ItemClass::key())
@@ -87,9 +80,9 @@ impl SeSealingKey {
                 }
                 _ => None,
             })),
-            // Only "no such item" means no key yet. Every other failure (keychain locked, missing
-            // entitlement, …) must propagate: treating it as "absent" would send the caller down
-            // the generate path and orphan any already-sealed passphrase.
+            // Only "no such item" means no key yet. Any other failure (keychain locked, missing
+            // entitlement, …) must propagate — reporting it as "absent" sends the caller down the
+            // generate path, orphaning every sealed passphrase.
             Err(e) if e.code() == errSecItemNotFound => Ok(None),
             Err(e) => Err(sec_err("search for SE key", e)),
         }
