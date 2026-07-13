@@ -1,6 +1,3 @@
-// Compact / minimized launcher — a narrow quick-launch panel. Shares the full view's design
-// system (light theme, brand tiles via `visualFor`, zinc/blue tokens); it just stacks apps in a
-// single column for a slim window. Shown by App.tsx below the responsive width threshold.
 import { useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import {
@@ -106,7 +103,7 @@ export function CompactView() {
 
       <main className="flex-1 overflow-y-auto px-2 pb-2">
         {filtered.map((app) => {
-          const { Icon, bg } = visualFor(app.label);
+          const { src, Icon, bg } = visualFor(app.label);
           const busy = launching.has(app.id);
           return (
             <button
@@ -122,10 +119,22 @@ export function CompactView() {
                   bg,
                 )}
               >
-                <Icon
-                  className={cn("h-5 w-5 transition-opacity", busy && "opacity-30")}
-                  strokeWidth={2}
-                />
+                {src ? (
+                  <img
+                    src={src}
+                    alt=""
+                    draggable={false}
+                    className={cn(
+                      "h-6 w-6 object-contain transition-opacity",
+                      busy && "opacity-30",
+                    )}
+                  />
+                ) : (
+                  <Icon
+                    className={cn("h-5 w-5 transition-opacity", busy && "opacity-30")}
+                    strokeWidth={2}
+                  />
+                )}
                 {busy && (
                   <span className="absolute inset-0 grid place-items-center">
                     <Loader2 className="h-4 w-4 animate-spin" strokeWidth={2.4} />

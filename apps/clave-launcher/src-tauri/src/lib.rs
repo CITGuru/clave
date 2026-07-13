@@ -1,19 +1,8 @@
-//! Clave launcher desktop app (Tauri) — backend.
-//!
-//! Thin Tauri commands that ask the privileged `clave-daemon` for the launch catalog, a contained
-//! launch spec, and the enforcement posture over the authenticated Unix-socket IPC link; the React
-//! frontend calls these via `invoke`. When no daemon is running, each command falls back to an
-//! embedded demo policy so the UI stays runnable. Socket path: `$CLAVE_LAUNCHER_SOCK`, else
-//! `<temp>/clave-launcher.sock`.
-
 use clave_core::{AppId, AppPolicy, AppRule, BinaryMatch, LaunchProfile, PolicyBundle};
 use serde::Serialize;
 
-/// Demo mount point used only by the fallback. With the daemon connected, the spec's env already
-/// points into the real `platform.volume().mount_point()`.
 const MOUNT: &str = "/Volumes/ClaveDisk";
 
-/// The daemon's launcher socket: `$CLAVE_LAUNCHER_SOCK`, else `<temp>/clave-launcher.sock`.
 #[cfg(unix)]
 fn socket_path() -> std::path::PathBuf {
     if let Ok(p) = std::env::var("CLAVE_LAUNCHER_SOCK") {
@@ -24,7 +13,6 @@ fn socket_path() -> std::path::PathBuf {
     p
 }
 
-/// Connect + handshake to the daemon, or `None` if it isn't reachable (→ caller uses the fallback).
 #[cfg(unix)]
 async fn daemon() -> Option<clave_ipc::transport::LauncherClient> {
     clave_ipc::transport::LauncherClient::connect(socket_path())
@@ -52,8 +40,6 @@ pub struct CapStatus {
     status: String,
 }
 
-/// Build one allow-listed work app (demo). Team id is a placeholder; production rules carry the
-/// real code-signing identity the daemon vetted.
 fn app(id: &str, signing: &str, name: &str, exec: &str) -> AppRule {
     AppRule::new(
         AppId(id.into()),
@@ -66,14 +52,10 @@ fn app(id: &str, signing: &str, name: &str, exec: &str) -> AppRule {
     .with_executable(exec)
 }
 
-/// Chromium/Electron apps launch with a private `--user-data-dir` so they run contained instead of
-/// handing off to the user's personal instance (see [`LaunchProfile::chromium`]).
 fn chromium_app(id: &str, signing: &str, name: &str, exec: &str) -> AppRule {
     app(id, signing, name, exec).with_launch(LaunchProfile::chromium())
 }
 
-/// A stand-in for the signed policy the daemon would supply — a representative set of work apps so
-/// the launcher grid is populated on a dev machine.
 fn demo_policy() -> PolicyBundle {
     let mut pol = PolicyBundle::restrictive_default();
     pol.apps = AppPolicy {
@@ -85,18 +67,18 @@ fn demo_policy() -> PolicyBundle {
             app("files-work", "com.apple.finder", "Files", "/System/Library/CoreServices/Finder.app"),
             app("powerpoint-work", "com.microsoft.Powerpoint", "PowerPoint", "/Applications/Microsoft PowerPoint.app"),
             chromium_app("edge-work", "com.microsoft.edgemac", "Edge", "/Applications/Microsoft Edge.app"),
-            app("academy-work", "ai.finic.academy", "Clave Academy", "/Applications/Clave Academy.app"),
             app("acrobat-work", "com.adobe.Acrobat.Pro", "Adobe Acrobat", "/Applications/Adobe Acrobat.app"),
-            app("clavework-work", "ai.finic.work", "Clave Work", "/Applications/Clave Work.app"),
             chromium_app("teams-work", "com.microsoft.teams2", "Teams", "/Applications/Microsoft Teams.app"),
             chromium_app("slack-work", "com.tinyspeck.slackmacgap", "Slack", "/Applications/Slack.app"),
+            chromium_app("vscode-work", "com.microsoft.VSCode", "Visual Studio Code", "/Applications/Visual Studio Code.app"),
+            chromium_app("cursor-work", "com.todesktop.230313mzl4w4u92", "Cursor", "/Applications/Cursor.app"),
+            app("calculator-work", "com.apple.calculator", "Calculator", "/System/Applications/Calculator.app"),
+            app("textedit-work", "com.apple.TextEdit", "TextEdit", "/System/Applications/TextEdit.app"),
         ],
     };
     pol
 }
 
-/// The launcher catalog: the daemon's allow-listed work apps, or the demo set when
-/// the daemon isn't running.
 #[tauri::command]
 async fn list_apps() -> Vec<AppInfo> {
     #[cfg(unix)]
@@ -114,8 +96,6 @@ async fn list_apps() -> Vec<AppInfo> {
     demo_apps()
 }
 
-/// Resolve the contained spawn spec for an app (what a launch would execute). With the daemon
-/// connected it is authoritative — an unknown app yields `None`, not the demo spec.
 #[tauri::command]
 async fn launch_spec(app_id: String) -> Option<LaunchInfo> {
     #[cfg(unix)]
@@ -127,9 +107,6 @@ async fn launch_spec(app_id: String) -> Option<LaunchInfo> {
     demo_launch_spec(&app_id)
 }
 
-/// Spawn one app contained and seed it into the supervised zone set. Requires a running daemon;
-/// returns the pid, or `None` if there's no daemon or the launch was refused. The demo fallback
-/// never spawns — only a real daemon owns process supervision.
 #[tauri::command]
 async fn launch_app(app_id: String) -> Option<u32> {
     #[cfg(unix)]
@@ -142,8 +119,6 @@ async fn launch_app(app_id: String) -> Option<u32> {
     None
 }
 
-/// This target's OS-adapter enforcement posture: the daemon's live report, or a
-/// locally-constructed adapter posture as a fallback.
 #[tauri::command]
 async fn enforcement() -> Vec<CapStatus> {
     #[cfg(unix)]

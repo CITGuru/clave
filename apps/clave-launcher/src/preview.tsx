@@ -1,5 +1,3 @@
-// Browser preview harness: stubs the Tauri `invoke` bridge with demo data so the real <App/>
-// renders (and can be screenshotted) without the Rust backend. Not part of the production build.
 import React from "react";
 import { createRoot } from "react-dom/client";
 import App from "./App";
@@ -14,11 +12,11 @@ const APPS = [
   { id: "files-work", label: "Files" },
   { id: "powerpoint-work", label: "PowerPoint" },
   { id: "edge-work", label: "Edge" },
-  { id: "academy-work", label: "Clave Academy" },
   { id: "acrobat-work", label: "Adobe Acrobat" },
-  { id: "clavework-work", label: "Clave Work" },
   { id: "teams-work", label: "Teams" },
   { id: "slack-work", label: "Slack" },
+  { id: "vscode-work", label: "Visual Studio Code" },
+  { id: "cursor-work", label: "Cursor" },
 ];
 
 const POSTURE = [
@@ -35,7 +33,6 @@ const POSTURE = [
   invoke: async (cmd: string) => {
     if (cmd === "list_apps") return APPS;
     if (cmd === "enforcement") return POSTURE;
-    // Simulate a connected daemon so the preview shows the real spawn-and-supervise success path.
     if (cmd === "launch_app") return 4242 + Math.floor(Math.random() * 1000);
     if (cmd === "launch_spec")
       return {
@@ -48,7 +45,6 @@ const POSTURE = [
   },
 };
 
-// ?view= lets the screenshot harness show specific interaction states.
 const view = new URLSearchParams(location.search).get("view");
 const node =
   view === "collapsed" ? (

@@ -51,7 +51,7 @@ function AppTile({
   onLaunch: (a: AppInfo) => void;
   onRemove: (id: string) => void;
 }) {
-  const { Icon, bg } = visualFor(app.label);
+  const { src, Icon, bg } = visualFor(app.label);
   return (
     <div className="group relative">
       <button
@@ -74,10 +74,22 @@ function AppTile({
             bg,
           )}
         >
-          <Icon
-            className={cn("h-8 w-8 transition-opacity", busy && "opacity-30")}
-            strokeWidth={1.9}
-          />
+          {src ? (
+            <img
+              src={src}
+              alt=""
+              draggable={false}
+              className={cn(
+                "h-9 w-9 object-contain transition-opacity",
+                busy && "opacity-30",
+              )}
+            />
+          ) : (
+            <Icon
+              className={cn("h-8 w-8 transition-opacity", busy && "opacity-30")}
+              strokeWidth={1.9}
+            />
+          )}
           {busy && (
             <span className="absolute inset-0 grid place-items-center">
               <Loader2 className="h-6 w-6 animate-spin" strokeWidth={2.4} />
@@ -371,14 +383,14 @@ export function FullView({
         >
           <NavItem
             icon={Wifi}
-            label="Connectivity status"
+            label="Connectivity"
             active={section === "connectivity"}
             collapsed={collapsed}
             onClick={() => setSection("connectivity")}
           />
           <NavItem
             icon={ShieldCheck}
-            label="Compliance status"
+            label="Compliance"
             active={section === "compliance"}
             count={complianceIssues || undefined}
             collapsed={collapsed}
@@ -489,7 +501,7 @@ export function FullView({
           )}
           {section === "connectivity" && (
             <Placeholder
-              title="Connectivity status"
+              title="Connectivity"
               icon={Wifi}
               text="Split-tunnel routing is managed by Clave — work traffic flows through the secure gateway, personal traffic goes direct."
             />
@@ -497,7 +509,7 @@ export function FullView({
           {section === "compliance" && (
             <div>
               <h1 className="text-[26px] font-semibold tracking-tight">
-                Compliance status
+                Compliance
               </h1>
               <p className="mb-6 mt-3 text-[13px] text-zinc-500">
                 This device’s enforcement posture.
