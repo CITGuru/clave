@@ -134,6 +134,8 @@ pub fn run_macos(profile: Profile) {
         .build()
         .expect("tokio runtime");
 
+    spawn_clipboard_guard(Arc::clone(&daemon), Arc::clone(&zones));
+
     // The Clave Edge overlay owns the process **main thread** (AppKit is main-thread-only), so the
     // launcher IPC server runs on a worker thread. `CLAVE_EDGE=0` skips the overlay and serves the
     // IPC loop directly on the main thread (useful for headless / SSH runs with no window server).
@@ -155,6 +157,24 @@ pub fn run_macos(profile: Profile) {
     println!("  (set CLAVE_EDGE=0 to disable, CLAVE_EDGE_CAPTURE=1 to show it in screenshots)");
     let cfg_daemon = Arc::clone(&daemon);
     clave_mac::run_clave_edge(zones, overlay_tracked, move || cfg_daemon.overlay_cfg());
+}
+
+/// Watch the clipboard for work→personal transfers (doc 05 §3). Every transfer is decided by
+/// `clave-core`'s policy through [`Daemon::decide_action`], which also audits the denials — so the
+/// gateway gets a record even when the reactive clear loses the race to a fast paste.
+///
+/// Its own thread: the guard polls, and the main thread belongs to the Clave Edge overlay.
+fn spawn_clipboard_guard(daemon: Arc<Daemon>, zones: Arc<ZoneRegistry>) {
+    std::thread::spawn(move || {
+        clave_mac::run_clipboard_guard(zones, move |src, dst, fmt| {
+            daemon
+                .decide_action(
+                    &clave_core::Action::ClipboardTransfer { src, dst, fmt },
+                    unix_now(),
+                )
+                .decision
+        });
+    });
 }
 
 /// Accept launcher connections forever, serving each over the `clave-ipc` launcher protocol against
@@ -242,6 +262,25 @@ fn demo_policy() -> clave_core::PolicyBundle {
         app(id, signing, name, exec).with_launch(LaunchProfile::chromium())
     }
 
+    // Code editors spawn login shells, so their contained HOME can't be empty or the user's shell
+    // rc files error out and no toolchains are on PATH. Seed the shell config + common toolchain
+    // dirs from the real home (lab-only convenience; see `seed_contained_home`).
+    fn editor_app(id: &str, signing: &str, name: &str, exec: &str) -> AppRule {
+        app(id, signing, name, exec).with_launch(LaunchProfile::chromium().with_seed_home([
+            ".zshenv",
+            ".zprofile",
+            ".zshrc",
+            ".bashrc",
+            ".bash_profile",
+            ".profile",
+            ".gitconfig",
+            ".local",
+            ".cargo",
+            ".nvm",
+            ".bun",
+        ]))
+    }
+
     let mut pol = PolicyBundle::restrictive_default();
     pol.version = 1;
     pol.apps = AppPolicy {
@@ -318,13 +357,13 @@ fn demo_policy() -> clave_core::PolicyBundle {
                 "Slack",
                 "/Applications/Slack.app",
             ),
-            chromium_app(
+            editor_app(
                 "vscode-work",
                 "com.microsoft.VSCode",
                 "Visual Studio Code",
                 "/Applications/Visual Studio Code.app",
             ),
-            chromium_app(
+            editor_app(
                 "cursor-work",
                 "com.todesktop.230313mzl4w4u92",
                 "Cursor",

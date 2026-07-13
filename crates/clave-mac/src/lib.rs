@@ -16,6 +16,11 @@ mod edge;
 #[cfg(target_os = "macos")]
 pub use edge::run_clave_edge;
 
+mod clipboard;
+#[cfg(target_os = "macos")]
+pub use clipboard::{frontmost_app_pid, run_clipboard_guard};
+pub use clipboard::{ClipboardGuard, GuardAction};
+
 #[cfg(target_os = "macos")]
 mod se_seal;
 

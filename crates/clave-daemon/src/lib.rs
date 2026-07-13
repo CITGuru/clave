@@ -437,6 +437,8 @@ fn spawn_contained(spec: &LaunchSpec) -> std::io::Result<LaunchedApp> {
         }
     }
 
+    seed_contained_home(spec);
+
     let program = resolve_program(&spec.executable);
     let mut cmd = Command::new(program);
     cmd.args(&spec.args);
@@ -453,6 +455,55 @@ fn spawn_contained(spec: &LaunchSpec) -> std::io::Result<LaunchedApp> {
         pid,
         proc: proc_id_for_pid(pid),
     })
+}
+
+/// Expose a curated set of the user's real-home entries (shell config, toolchains) inside the
+/// contained HOME so a launched dev tool has a working environment instead of a bare home. Each
+/// requested path (relative to the real user home, per [`LaunchSpec::seed_home`]) is symlinked in
+/// if it exists and isn't already present. Best-effort: a failed link never blocks the launch.
+///
+/// Note: a symlink crosses the enclave boundary — the work process gains access to the linked
+/// real-home path. This is an intentional lab-only convenience for developer tools; a production
+/// build over real FS redirection would seed copies (or nothing) instead.
+fn seed_contained_home(spec: &LaunchSpec) {
+    if spec.seed_home.is_empty() {
+        return;
+    }
+    let Some(home) = spec
+        .env
+        .iter()
+        .find(|(k, _)| k == "HOME")
+        .map(|(_, v)| v.as_str())
+        .filter(|v| !v.is_empty())
+    else {
+        return;
+    };
+    let Ok(real_home) = std::env::var("HOME") else {
+        return;
+    };
+    if home == real_home {
+        return;
+    }
+
+    for rel in &spec.seed_home {
+        let rel = rel.trim_start_matches('/');
+        if rel.is_empty() || rel.split('/').any(|c| c == "..") {
+            continue;
+        }
+        let src = std::path::Path::new(&real_home).join(rel);
+        if !src.exists() {
+            continue;
+        }
+        let dst = std::path::Path::new(home).join(rel);
+        if std::fs::symlink_metadata(&dst).is_ok() {
+            continue;
+        }
+        if let Some(parent) = dst.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        #[cfg(unix)]
+        let _ = std::os::unix::fs::symlink(&src, &dst);
+    }
 }
 
 fn resolve_program(executable: &str) -> std::path::PathBuf {

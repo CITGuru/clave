@@ -170,7 +170,10 @@ fn default_enforcement() -> [(Capability, EnforcementStatus); Capability::COUNT]
         // Real encryption, hardware key custody, and crypto-shred (volume.rs, se_seal.rs) — but the
         // mount is not yet ES `AUTH_OPEN`-gated, so `DevelopmentOnly` (doc 04 §4).
         (Volume, DevelopmentOnly),
-        (Clipboard, Unavailable),
+        // Monitor + reactive-clear + audit (clipboard.rs). macOS offers no way to intercept a paste,
+        // so this can never reach `Enforced` — it narrows the leak window and records every
+        // work→personal transfer, but a paste inside the poll window still wins (doc 05 §3.3).
+        (Clipboard, DevelopmentOnly),
         (Network, DevelopmentOnly),
         (Screen, Unavailable),
         (Overlay, Unavailable),
@@ -254,10 +257,13 @@ mod tests {
             r.status(Capability::Volume),
             EnforcementStatus::DevelopmentOnly
         );
+        // Clipboard is monitored and reactively cleared, but macOS cannot hard-block a paste — it
+        // must never claim `Enforced` (doc 05 §3.3).
         assert_eq!(
             r.status(Capability::Clipboard),
-            EnforcementStatus::Unavailable
+            EnforcementStatus::DevelopmentOnly
         );
+        assert_eq!(r.status(Capability::Screen), EnforcementStatus::Unavailable);
     }
 
     #[test]

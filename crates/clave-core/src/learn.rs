@@ -71,6 +71,7 @@ impl LearnSession {
             namespace_prefix,
             hive_seed: None,
             passthrough_paths: Vec::new(),
+            seed_home: Vec::new(),
         };
         LearnedProfile {
             app_id: self.app_id.clone(),

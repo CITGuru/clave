@@ -64,6 +64,7 @@ impl AppRule {
             args: resolved.args,
             env: resolved.env,
             namespace_prefix: resolved.namespace_prefix,
+            seed_home: resolved.seed_home,
         }
     }
 }
@@ -89,6 +90,10 @@ pub struct LaunchSpec {
     pub args: Vec<String>,
     pub env: Vec<(String, String)>,
     pub namespace_prefix: Option<String>,
+    /// Paths (relative to the real user home) to make available inside the contained HOME — the
+    /// OS layer symlinks each existing one at launch. Empty ⇒ a pristine home.
+    #[serde(default)]
+    pub seed_home: Vec<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -102,6 +107,11 @@ pub struct LaunchProfile {
     pub namespace_prefix: Option<String>,
     pub hive_seed: Option<String>,
     pub passthrough_paths: Vec<String>,
+    /// Paths under the real user home (e.g. `.zshrc`, `.local`, `.cargo`) to expose inside the
+    /// contained HOME so a launched dev tool sees the user's shell config / toolchains instead of
+    /// an empty home. The daemon symlinks each existing entry at launch. Empty ⇒ a pristine home.
+    #[serde(default)]
+    pub seed_home: Vec<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -111,6 +121,7 @@ pub struct ResolvedLaunch {
     pub env: Vec<(String, String)>,
     pub hive_path: Option<String>,
     pub namespace_prefix: Option<String>,
+    pub seed_home: Vec<String>,
 }
 
 impl LaunchProfile {
@@ -145,6 +156,7 @@ impl LaunchProfile {
             env,
             hive_path,
             namespace_prefix: self.namespace_prefix.clone(),
+            seed_home: self.seed_home.clone(),
         }
     }
 
@@ -153,6 +165,17 @@ impl LaunchProfile {
             container: ContainerKind::Chromium,
             ..Self::default()
         }
+    }
+
+    /// Expose paths (relative to the real user home) inside the contained HOME at launch — see
+    /// [`LaunchProfile::seed_home`].
+    pub fn with_seed_home<I, S>(mut self, paths: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        self.seed_home = paths.into_iter().map(Into::into).collect();
+        self
     }
 }
 
@@ -303,6 +326,7 @@ mod tests {
             namespace_prefix: Some("Clave-work\\".into()),
             hive_seed: Some("zone-default.hiv".into()),
             passthrough_paths: vec![],
+            seed_home: vec![],
         };
         let r = profile.resolve(&AppId("office".into()), "X:");
         assert_eq!(r.home, "X:/profiles/office");
@@ -310,6 +334,23 @@ mod tests {
         assert_eq!(r.namespace_prefix.as_deref(), Some("Clave-work\\"));
         assert!(r.env.iter().any(|(k, v)| k == "CLAVE_ZONE" && v == "work"));
         assert!(r.args.is_empty(), "a native profile passes no launch args");
+    }
+
+    #[test]
+    fn seed_home_flows_through_resolve_and_launch_spec() {
+        let rule = AppRule::new(AppId("vscode-work".into()), chrome())
+            .with_executable("/Applications/Visual Studio Code.app")
+            .with_launch(LaunchProfile::chromium().with_seed_home([".zshrc", ".local"]));
+        let r = rule.launch.resolve(&rule.app_id, "/Volumes/ClaveDisk");
+        assert_eq!(
+            r.seed_home,
+            vec![".zshrc".to_string(), ".local".to_string()]
+        );
+        let spec = rule.launch_spec("/Volumes/ClaveDisk");
+        assert_eq!(
+            spec.seed_home,
+            vec![".zshrc".to_string(), ".local".to_string()]
+        );
     }
 
     #[test]
