@@ -436,6 +436,18 @@ fn spawn_contained(spec: &LaunchSpec) -> std::io::Result<LaunchedApp> {
             let _ = std::fs::create_dir_all(value);
         }
     }
+    #[cfg(target_os = "macos")]
+    if let Some(home) = spec
+        .env
+        .iter()
+        .find(|(k, _)| k == "HOME")
+        .map(|(_, v)| v.as_str())
+        .filter(|v| !v.is_empty())
+    {
+        if std::env::var("HOME").ok().as_deref() != Some(home) {
+            let _ = clave_mac::provision_contained_keychain(std::path::Path::new(home));
+        }
+    }
     for arg in &spec.args {
         if let Some(dir) = arg.strip_prefix("--user-data-dir=") {
             if !dir.is_empty() {
@@ -464,9 +476,6 @@ fn spawn_contained(spec: &LaunchSpec) -> std::io::Result<LaunchedApp> {
     })
 }
 
-/// Symlinks the `seed_home` entries from the real user home into the contained HOME (best-effort).
-/// Security note: each symlink crosses the enclave boundary, granting the work process access to the
-/// linked real-home path — a lab-only convenience; production would seed copies (or nothing).
 fn seed_contained_home(spec: &LaunchSpec) {
     if spec.seed_home.is_empty() {
         return;

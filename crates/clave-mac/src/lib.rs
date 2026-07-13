@@ -34,6 +34,11 @@ pub use input::{raw_keyboard_taps, run_input_watch};
 pub use input::{TapWatch, Tapper};
 
 #[cfg(target_os = "macos")]
+mod keychain;
+#[cfg(target_os = "macos")]
+pub use keychain::provision_contained_keychain;
+
+#[cfg(target_os = "macos")]
 mod se_seal;
 
 #[cfg(target_os = "macos")]
