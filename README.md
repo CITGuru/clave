@@ -34,7 +34,6 @@ The security-critical logic lives in one portable core that runs and is fully te
 
 ## Crate map
 
-
 | Crate            | Role                                                                                                                   |
 | ---------------- | ---------------------------------------------------------------------------------------------------------------------- |
 | `clave-platform` | The seam: portable value types + the OS-capability traits + the `EnforcementStatus` posture model                      |
