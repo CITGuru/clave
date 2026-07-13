@@ -12,10 +12,13 @@ path is* when the company owns an SSE/SASE stack of their own. The classifier
 and the privacy guarantee (personal traffic stays `Direct` and unseen — [doc 01 §9](01-threat-model.md))
 are untouched.
 
-> **Status:** design. The portable scaffold (provider model + mechanism dispatch) and the DNS-layer
-> integration are the first increment (§9); the live IPsec / explicit-proxy data planes need the OS
-> adapters and a real tenant — same Phase-2 wall as the WireGuard data plane (`DevelopmentOnly` until
-> entitled, [doc 14 §5.3](14-production-and-development-platform-requirements.md)).
+> **Status:** Increment 1 (§9) built and portable. The provider model (`NetworkProvider`,
+> `ForwardMode`, `Forwarding`, `DnsSteering`, `ProviderError`) and `decide_dns` live in `clave-core`,
+> carried in the signed policy bundle (`NetworkPolicy::providers`); the fail-closed seam factory
+> (`build_egress`) lives in `clave-net` and refuses any mode whose data plane is unbuilt. The live
+> IPsec / explicit-proxy data planes (Increments 2–3) need the OS adapters and a real tenant — same
+> Phase-2 wall as the WireGuard data plane (`DevelopmentOnly` until entitled,
+> [doc 14 §5.3](14-production-and-development-platform-requirements.md)).
 
 ---
 
@@ -117,9 +120,12 @@ Notes:
 - **No secrets inline.** Key material (IPsec PSK, client certs) is referenced by a **key-store handle**
   in `params`, resolved from the hardware root at use ([doc 04 §2](04-encrypted-volume.md)) — same
   discipline as the WireGuard private key (released from TPM / Secure Enclave, never persisted).
-- **Where it lives.** The record lives in `clave-net` next to the existing `GatewayConfig`; it is
-  carried to the device inside the signed policy bundle (`clave-core` / `clave-proto`). The daemon
-  reads it at provisioning and builds the seam.
+- **Where it lives.** The record is defined in `clave-core` (`net.rs`, alongside `classify_flow`) so
+  it can be carried in the signed policy bundle (`NetworkPolicy::providers`) — `clave-net` depends on
+  `clave-core`, not the reverse, so the model cannot live next to `GatewayConfig` and still ride the
+  bundle. The mechanism-dispatch seam factory (`build_egress`) is the part that lives in `clave-net`,
+  next to `GatewayConfig`, since that is where the `Tunnel` trait is. The daemon reads the provider at
+  provisioning and builds the seam.
 
 ### 4.1 Vendor profiles are fixtures
 
@@ -314,9 +320,9 @@ most naturally on macOS NE flows first.
    pure-Rust IKEv2 crate (less mature)? Trades `unsafe`/packaging against maturity. Affects doc 11/12.
 2. **`FlowForwarder` placement** — a `clave-net` trait driven by both OS adapters, or NE-only first
    given how cleanly NE flows fit `CONNECT`? (Windows needs a local listener regardless.)
-3. **Provider in the policy schema** — embed `NetworkProvider` directly in the policy bundle
-   ([doc 10](10-policy-engine-and-ipc.md)), or keep it in a separate signed enrollment artifact next to
-   the gateway keys? Leaning: policy bundle, since it changes with policy.
+3. **Provider in the policy schema** — ~~embed `NetworkProvider` directly in the policy bundle, or keep
+   it in a separate signed enrollment artifact next to the gateway keys?~~ **Decided (Increment 1):**
+   embedded in the policy bundle (`NetworkPolicy::providers`), since it changes with policy.
 
 ---
 

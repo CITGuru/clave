@@ -35,6 +35,10 @@ pub(crate) fn under(path: &str, prefix: &str) -> bool {
             .is_some_and(|rest| rest.starts_with('/'))
 }
 
+pub fn is_under_mount(path: &str, mount_point: &str) -> bool {
+    under(path, mount_point)
+}
+
 pub fn classify_path(
     path: &str,
     mount_point: &str,

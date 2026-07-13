@@ -1,7 +1,6 @@
 fn main() {
     println!("clave-daemon — IPC proto v{}", clave_ipc::PROTO_VERSION);
 
-    // The unsigned dev binary: no Secure Enclave, so it runs on its own throwaway Clave Disk.
     #[cfg(target_os = "macos")]
     clave_daemon::mac_main::run_macos(clave_daemon::mac_main::Profile::Dev);
 
@@ -9,14 +8,11 @@ fn main() {
     report_platform();
 }
 
-/// Windows: construct the real adapter and print its enforcement posture. The launcher IPC server
-/// is Unix-only (the named-pipe transport is a future scaffold), so this reports and exits.
 #[cfg(target_os = "windows")]
 fn report_platform() {
     use clave_platform::Platform;
     use std::sync::Arc;
 
-    // The process-notify driver feeds this zone mirror over the IOCTL channel in production.
     let zones = Arc::new(clave_core::ZoneRegistry::new());
     let platform = clave_win::WindowsPlatform::new(zones);
     let report = platform.enforcement_report();
@@ -31,7 +27,6 @@ fn report_platform() {
     }
 }
 
-/// No OS adapter is linked for other targets yet.
 #[cfg(not(any(target_os = "macos", target_os = "windows")))]
 fn report_platform() {
     println!("no OS platform adapter for this target yet; run `cargo test` for daemon logic.");

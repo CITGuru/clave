@@ -113,6 +113,12 @@ mod engine {
                 _ => None,
             }
         }
+
+        fn is_established(&self) -> bool {
+            self.tun
+                .time_since_last_handshake()
+                .is_some_and(|age| age < std::time::Duration::from_secs(180))
+        }
     }
 }
 

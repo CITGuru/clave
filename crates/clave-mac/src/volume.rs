@@ -10,10 +10,6 @@ use crate::se_seal::{Passphrase, SEALED_LEN};
 
 const KEYCHAIN_SERVICE: &str = "com.clave.volume";
 
-/// Caps the Clave Disk's growth; does not reserve space (a sparsebundle allocates bands lazily, so
-/// the blob stays as small as the data in it). Roomy because work apps write gigabytes of
-/// profile/cache into their contained HOME — too small a cap and every launched app dies with
-/// `ENOSPC`. Override with `CLAVE_DISK_SIZE_MB`.
 const DEFAULT_SIZE_MB: u64 = 65_536;
 const MIN_SIZE_MB: u64 = 512;
 
@@ -25,8 +21,6 @@ fn configured_size_mb() -> u64 {
         .max(MIN_SIZE_MB)
 }
 
-/// One account per container, whatever its custody form — a container has exactly one passphrase,
-/// so it must have exactly one record of it.
 fn key_account(container: u128) -> String {
     format!("sparsebundle-key-{container:032x}")
 }
@@ -44,13 +38,8 @@ fn keychain_delete(account: &str) {
     let _ = security_framework::passwords::delete_generic_password(KEYCHAIN_SERVICE, account);
 }
 
-/// How a container's passphrase is held. The stored blob is `[tag] ++ payload`, so the custody
-/// form travels *with* the secret and a reader can never mistake one for the other.
 enum StoredKey {
-    /// Sealed to this device's Secure Enclave (`se_seal`). Only the signed host can open it.
     Sealed(Box<[u8; SEALED_LEN]>),
-    /// Plain bytes in the login Keychain: OS-encrypted at rest, but not hardware-bound. What an
-    /// unsigned `cargo run` provisions, since it cannot reach the Secure Enclave.
     Plain(Passphrase),
 }
 
@@ -98,14 +87,10 @@ fn store(container: u128, key: &StoredKey) -> io::Result<()> {
     keychain_set(&key_account(container), &blob)
 }
 
-/// Recover the passphrase from its stored form. A sealed blob **requires** the Secure Enclave —
-/// if it is unreachable we fail closed rather than mint a replacement, because a replacement could
-/// never open the existing container.
 fn unwrap_stored(key: StoredKey) -> io::Result<Passphrase> {
     match key {
         StoredKey::Plain(p) => Ok(p),
         StoredKey::Sealed(sealed) => {
-            // `load`, never `load_or_generate`: a fresh SE key here would orphan this blob.
             let se_key = crate::se_seal::SeSealingKey::load()?.ok_or_else(|| {
                 io::Error::other(
                     "this container's passphrase is sealed to the Secure Enclave, but no SE key is \
@@ -118,10 +103,6 @@ fn unwrap_stored(key: StoredKey) -> io::Result<Passphrase> {
     }
 }
 
-/// Mint a fresh passphrase: 32 bytes of entropy, hex-encoded. `-stdinpass` reads its passphrase as
-/// a line of text — raw random bytes routinely contain a NUL or newline that truncates or misparses
-/// the read (hdiutil then fails with "unable to process -stdinpass argument"); hex is ASCII-safe and
-/// still carries the full 256 bits.
 fn mint_passphrase() -> io::Result<Passphrase> {
     let mut entropy = Zeroizing::new([0u8; 32]);
     getrandom::getrandom(&mut entropy[..])
@@ -135,9 +116,6 @@ fn mint_passphrase() -> io::Result<Passphrase> {
     Ok(out)
 }
 
-/// The passphrase for an **existing** container. Fails closed if the Keychain has no record of it:
-/// minting a new one here would produce a passphrase that cannot open the container that already
-/// exists on disk, silently wedging it.
 fn passphrase_for_existing(container: u128) -> io::Result<Passphrase> {
     match load_stored(container)? {
         Some(key) => unwrap_stored(key),
@@ -149,20 +127,12 @@ fn passphrase_for_existing(container: u128) -> io::Result<Passphrase> {
     }
 }
 
-/// What key custody a container may be *created* with. Custody is decided once, at creation, and
-/// every later open must satisfy it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Custody {
-    /// Secure-Enclave-sealed, or fail. The signed host uses this: a hardware-rooted deployment must
-    /// never quietly provision a software-only disk because the SE happened to be unreachable.
     RequireHardware,
-    /// Prefer the Secure Enclave, but accept a plain-Keychain passphrase when it is out of reach.
-    /// The unsigned `cargo run` dev binary uses this — it structurally cannot reach the SE.
     AllowPlainFallback,
 }
 
-/// The passphrase for a **new** container: reuse a stored one if provisioning was interrupted after
-/// the Keychain write but before the container was created, else mint and store one.
 fn passphrase_for_new(container: u128, custody: Custody) -> io::Result<Passphrase> {
     if let Some(key) = load_stored(container)? {
         return unwrap_stored(key);
@@ -174,7 +144,6 @@ fn passphrase_for_new(container: u128, custody: Custody) -> io::Result<Passphras
             let se_pub = se_key.public_key_bytes()?;
             StoredKey::Sealed(Box::new(crate::se_seal::seal(&se_pub, &passphrase)?))
         }
-        // Fail rather than silently downgrade a disk that is supposed to be hardware-rooted.
         (Err(e), Custody::RequireHardware) => {
             return Err(io::Error::other(format!(
                 "this Clave Disk must be sealed to the Secure Enclave, which is unreachable ({e}). \
@@ -217,9 +186,6 @@ fn run_hdiutil_with_passphrase(args: &[&str], target: &Path, passphrase: &[u8]) 
     Ok(())
 }
 
-/// Create the encrypted container. The caller has already established that `bundle_path` does not
-/// exist and minted the matching passphrase — see [`MacVolumeMount::attach`], which keeps the
-/// "create a new container" and "open an existing one" paths strictly separate.
 fn create(bundle_path: &Path, size_mb: u64, passphrase: &[u8]) -> io::Result<()> {
     if let Some(parent) = bundle_path.parent() {
         std::fs::create_dir_all(parent)?;
@@ -245,10 +211,6 @@ fn create(bundle_path: &Path, size_mb: u64, passphrase: &[u8]) -> io::Result<()>
     )
 }
 
-/// `hdiutil attach -mountpoint` creates the mount directory itself (via `diskarbitrationd`, which
-/// has the privilege a plain user doesn't: `/Volumes` is root-owned, `drwxr-xr-x` — `mkdir` under
-/// it fails with EACCES even though attaching a disk image there is ordinary, unprivileged user
-/// activity). Do **not** pre-create `mount_point`; that would just fail before hdiutil ever runs.
 fn attach(bundle_path: &Path, mount_point: &Path, passphrase: &[u8]) -> io::Result<()> {
     run_hdiutil_with_passphrase(
         &[
@@ -301,23 +263,10 @@ impl MacVolumeMount {
         }
     }
 
-    /// The container id this mount targets — the daemon matches it against a gateway wipe
-    /// command so a wipe meant for another device can't destroy this one (mirrors
-    /// `clave_volume::ClaveVolume::container_id`).
     pub fn container_id(&self) -> u128 {
         self.container
     }
 
-    /// Mount the Clave Disk, creating the container on first use.
-    ///
-    /// Creating and opening stay strictly separate: a container is created only alongside the
-    /// passphrase minted for it, and an existing one is opened only with the passphrase the
-    /// Keychain already holds ([`passphrase_for_existing`] fails closed rather than minting).
-    /// Minting for a container that already exists yields a passphrase that cannot decrypt it,
-    /// while overwriting the one that could.
-    ///
-    /// Idempotent: a `mount_point` that is already a live volume (possibly from another process, so
-    /// this instance's `mount_point` starts `None`) is adopted rather than re-attached.
     pub fn attach(&self, mount_point: impl Into<PathBuf>) -> PResult<()> {
         let mount_point = mount_point.into();
         if is_attached(&mount_point) {
@@ -347,9 +296,6 @@ impl MacVolumeMount {
     }
 }
 
-/// A not-yet-configured placeholder (container `0`, an unused path) — `MacPlatform::new` starts
-/// here so its tests never touch `hdiutil`/Keychain; `MacPlatform::configure_volume` replaces it
-/// with a real target before a lab `main.rs` calls [`MacVolumeMount::attach`].
 impl Default for MacVolumeMount {
     fn default() -> Self {
         Self::new(
@@ -382,10 +328,6 @@ impl VolumeMount for MacVolumeMount {
 
     fn request_wipe(&self) -> PResult<()> {
         self.detach()?;
-        // Crypto-shred: without the passphrase the container is unrecoverable, whichever custody
-        // form it was in. Deleting an absent item is the same idempotent no-op `KeyStore::destroy`
-        // documents. (The Secure Enclave key itself is per-device and shared across containers, so
-        // it is deliberately *not* destroyed here — only this container's sealed blob.)
         keychain_delete(&key_account(self.container));
         if self.bundle_path.exists() {
             std::fs::remove_dir_all(&self.bundle_path).map_err(io_err)?;
@@ -398,9 +340,6 @@ impl VolumeMount for MacVolumeMount {
 mod tests {
     use super::*;
 
-    /// A test container: a unique id plus its own bundle/mount paths, torn down on drop —
-    /// unmounted, container removed, **and its Keychain item deleted**. Without the last, every
-    /// test run would leave a live passphrase item behind in the developer's login Keychain.
     struct TestVolume {
         container: u128,
         bundle: PathBuf,
@@ -419,13 +358,8 @@ mod tests {
                 "clave-volume-test-{}-{n}-{name}",
                 std::process::id()
             ));
-            // Siblings under an existing directory: `hdiutil attach -mountpoint` creates the leaf
-            // directory but not its parents, so the mount point must not be nested under a path
-            // that doesn't exist yet.
             let bundle = base.with_extension("sparsebundle");
             let mount_point = base.with_extension("mnt");
-            // A bare `cargo test` binary cannot reach the Secure Enclave, so tests provision with
-            // the fallback custody — the same path the unsigned dev daemon takes.
             let vol = MacVolumeMount::new(container, &bundle, Custody::AllowPlainFallback);
             Self {
                 container,
@@ -435,14 +369,10 @@ mod tests {
             }
         }
 
-        /// A second `MacVolumeMount` over the *same* container and bundle — models a different
-        /// process (e.g. the signed host vs. `cargo run`) opening the same disk.
         fn reopen(&self) -> MacVolumeMount {
             MacVolumeMount::new(self.container, &self.bundle, Custody::AllowPlainFallback)
         }
 
-        /// The same disk, but opened by a mount that *requires* hardware custody — models the
-        /// signed host.
         fn reopen_requiring_hardware(&self) -> MacVolumeMount {
             MacVolumeMount::new(self.container, &self.bundle, Custody::RequireHardware)
         }
@@ -486,9 +416,6 @@ mod tests {
         t.vol.detach().expect("final detach");
     }
 
-    /// A second mount over an already-provisioned container must open it with the stored
-    /// passphrase, never mint a fresh one — a minted passphrase cannot decrypt what is already
-    /// there, and storing it destroys the one that could.
     #[test]
     fn reopening_an_existing_container_reuses_its_stored_passphrase() {
         let t = TestVolume::new("reopen");
@@ -498,7 +425,6 @@ mod tests {
         std::fs::write(&marker, b"work data").expect("write inside mount");
         t.vol.detach().expect("detach");
 
-        // A fresh MacVolumeMount — as a different process would construct — over the same disk.
         let second = t.reopen();
         second
             .attach(&t.mount_point)
@@ -511,8 +437,6 @@ mod tests {
         second.detach().expect("detach");
     }
 
-    /// Fail closed: an existing container whose Keychain passphrase is gone must refuse to mount,
-    /// not mint a replacement (which could never open it, and would overwrite the real record).
     #[test]
     fn existing_container_without_a_stored_passphrase_refuses_to_mount() {
         let t = TestVolume::new("orphaned");
@@ -557,9 +481,6 @@ mod tests {
         assert!(t.vol.request_wipe().is_ok());
     }
 
-    /// `RequireHardware` must never quietly provision a software-only disk. A bare `cargo test`
-    /// binary cannot reach the Secure Enclave, so this exercises the refusal directly; under the
-    /// signed host the SE *is* reachable and the same call provisions a sealed disk.
     #[test]
     fn require_hardware_refuses_to_provision_without_the_secure_enclave() {
         let t = TestVolume::new("require-hw");

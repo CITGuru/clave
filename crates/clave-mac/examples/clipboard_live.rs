@@ -1,24 +1,9 @@
-//! Drives the real clipboard guard against the real macOS pasteboard.
-//!
-//! Unit tests cover the state machine; this exercises the AppKit half — `changeCount`, the declared
-//! UTIs, `frontmostApplication`, and `clearContents` — end to end:
-//!
-//! 1. treat the current frontmost app as a work app (join it to the zone),
-//! 2. copy a secret while it is in front  → the guard tags it as a work payload,
-//! 3. drop it from the zone               → the frontmost app is now "personal",
-//! 4. the guard must clear the pasteboard → the secret is gone.
-//!
-//! ```sh
-//! cargo run -p clave-mac --example clipboard_live
-//! ```
-
 use clave_core::{JoinReason, ZoneRegistry};
 use clave_platform::{Decision, ProcId, Zone};
 use std::process::Command;
 use std::sync::Arc;
 use std::time::Duration;
 
-/// Long enough for the guard's 200 ms poll to observe each step.
 const SETTLE: Duration = Duration::from_millis(700);
 const SECRET: &str = "quarterly-revenue-projection-CONFIDENTIAL";
 
@@ -57,7 +42,6 @@ fn main() {
     let zones = Arc::new(ZoneRegistry::new());
     zones.join(proc_id(pid), JoinReason::Launcher);
 
-    // The restrictive default (doc 05 §1): nothing leaves the enclave.
     std::thread::spawn({
         let zones = Arc::clone(&zones);
         move || {

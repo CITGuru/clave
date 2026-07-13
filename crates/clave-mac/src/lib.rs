@@ -1,6 +1,6 @@
 #![allow(unexpected_cfgs)]
 
-use clave_core::{classify_exec, AppPolicy, BinaryMatch, JoinReason, ZoneRegistry};
+use clave_core::{classify_exec, AppPolicy, BinaryMatch, JoinReason, PolicyBundle, ZoneRegistry};
 use clave_platform::{ProcId, Route};
 use std::ffi::CStr;
 use std::os::raw::c_char;
@@ -32,6 +32,19 @@ mod input;
 #[cfg(target_os = "macos")]
 pub use input::{raw_keyboard_taps, run_input_watch};
 pub use input::{TapWatch, Tapper};
+
+#[cfg(target_os = "macos")]
+mod launch;
+#[cfg(target_os = "macos")]
+pub use launch::{bundle_identifier, running_pids_for_bundle, wait_for_app_pid};
+
+#[cfg(target_os = "macos")]
+mod es_gate;
+#[cfg(target_os = "macos")]
+pub use es_gate::{
+    apply_file_policy, authorize_clone, authorize_open, set_allow_save_outside_enclave,
+    set_mount_prefix,
+};
 
 #[cfg(target_os = "macos")]
 mod keychain;
@@ -90,8 +103,6 @@ unsafe fn read_token(token_ptr: *const u32) -> Option<[u32; 8]> {
     Some(t)
 }
 
-/// # Safety
-/// `token_ptr` must be null or point to 8 readable, aligned `u32`s (a macOS `audit_token_t`).
 #[no_mangle]
 pub unsafe extern "C" fn clave_mac_route_flow(token_ptr: *const u32, dst_blocked: bool) -> u8 {
     match unsafe { read_token(token_ptr) } {
@@ -100,14 +111,18 @@ pub unsafe extern "C" fn clave_mac_route_flow(token_ptr: *const u32, dst_blocked
     }
 }
 
-/// # Safety
-/// `ptr` must be null or point to `len` readable bytes.
 #[no_mangle]
 pub unsafe extern "C" fn clave_mac_load_policy_json(ptr: *const u8, len: usize) -> bool {
     if ptr.is_null() {
         return false;
     }
     let bytes = unsafe { std::slice::from_raw_parts(ptr, len) };
+    #[cfg(target_os = "macos")]
+    if let Ok(bundle) = serde_json::from_slice::<PolicyBundle>(bytes) {
+        *policy().write().expect("policy lock poisoned") = bundle.apps;
+        crate::es_gate::apply_file_policy(&bundle.files);
+        return true;
+    }
     match serde_json::from_slice::<AppPolicy>(bytes) {
         Ok(parsed) => {
             *policy().write().expect("policy lock poisoned") = parsed;
@@ -117,15 +132,13 @@ pub unsafe extern "C" fn clave_mac_load_policy_json(ptr: *const u8, len: usize) 
     }
 }
 
-/// # Safety
-/// `parent_token`/`target_token` must each be null or point to 8 readable, aligned `u32`s;
-/// `team_id`/`signing_id` must each be null or a valid NUL-terminated C string.
 #[no_mangle]
 pub unsafe extern "C" fn clave_mac_authorize_exec(
     parent_token: *const u32,
     target_token: *const u32,
     team_id: *const c_char,
     signing_id: *const c_char,
+    is_platform_binary: bool,
 ) -> bool {
     let parent_supervised = match unsafe { read_token(parent_token) } {
         Some(t) => zones().is_supervised(&ProcId::macos(t)),
@@ -137,6 +150,7 @@ pub unsafe extern "C" fn clave_mac_authorize_exec(
     };
     let verdict = classify_exec(
         &binary,
+        is_platform_binary,
         parent_supervised,
         &policy().read().expect("policy lock poisoned"),
     );
@@ -154,8 +168,6 @@ pub unsafe extern "C" fn clave_mac_authorize_exec(
     verdict.allow
 }
 
-/// # Safety
-/// `token_ptr` must be null or point to 8 readable, aligned `u32`s.
 #[no_mangle]
 pub unsafe extern "C" fn clave_mac_zone_join(token_ptr: *const u32) {
     if let Some(t) = unsafe { read_token(token_ptr) } {
@@ -163,8 +175,6 @@ pub unsafe extern "C" fn clave_mac_zone_join(token_ptr: *const u32) {
     }
 }
 
-/// # Safety
-/// `token_ptr` must be null or point to 8 readable, aligned `u32`s.
 #[no_mangle]
 pub unsafe extern "C" fn clave_mac_zone_leave(token_ptr: *const u32) {
     if let Some(t) = unsafe { read_token(token_ptr) } {
@@ -172,14 +182,67 @@ pub unsafe extern "C" fn clave_mac_zone_leave(token_ptr: *const u32) {
     }
 }
 
-/// # Safety
-/// `token_ptr` must be null or point to 8 readable, aligned `u32`s.
 #[no_mangle]
 pub unsafe extern "C" fn clave_mac_can_access_volume(token_ptr: *const u32) -> bool {
     match unsafe { read_token(token_ptr) } {
         Some(t) => zones().is_supervised(&ProcId::macos(t)),
         None => false,
     }
+}
+
+#[cfg(target_os = "macos")]
+#[no_mangle]
+pub unsafe extern "C" fn clave_mac_set_mount_prefix(ptr: *const c_char) -> bool {
+    if ptr.is_null() {
+        return false;
+    }
+    let prefix = unsafe { read_cstr(ptr) };
+    if prefix.is_empty() {
+        return false;
+    }
+    crate::es_gate::set_mount_prefix(&prefix);
+    true
+}
+
+#[cfg(target_os = "macos")]
+#[no_mangle]
+pub unsafe extern "C" fn clave_mac_authorize_open(
+    token_ptr: *const u32,
+    path_ptr: *const c_char,
+    write: bool,
+) -> bool {
+    let Some(t) = (unsafe { read_token(token_ptr) }) else {
+        return false;
+    };
+    if path_ptr.is_null() {
+        return false;
+    }
+    let path = unsafe { read_cstr(path_ptr) };
+    if path.is_empty() {
+        return false;
+    }
+    crate::es_gate::authorize_open(zones(), ProcId::macos(t), &path, write)
+}
+
+#[cfg(target_os = "macos")]
+#[no_mangle]
+pub unsafe extern "C" fn clave_mac_authorize_clone(
+    token_ptr: *const u32,
+    source_ptr: *const c_char,
+    target_ptr: *const c_char,
+) -> bool {
+    let Some(t) = (unsafe { read_token(token_ptr) }) else {
+        return false;
+    };
+    if source_ptr.is_null() || target_ptr.is_null() {
+        return false;
+    }
+    let source = unsafe { read_cstr(source_ptr) };
+    let target = unsafe { read_cstr(target_ptr) };
+    if source.is_empty() || target.is_empty() {
+        return false;
+    }
+    crate::es_gate::authorize_clone(zones(), ProcId::macos(t), &source, &target)
 }
 
 #[cfg(test)]
@@ -228,6 +291,7 @@ mod tests {
                 target.as_ptr(),
                 team.as_ptr(),
                 sig.as_ptr(),
+                false,
             )
         };
         assert!(allow, "exec is always allowed");
@@ -244,6 +308,7 @@ mod tests {
                 other.as_ptr(),
                 team.as_ptr(),
                 bad.as_ptr(),
+                false,
             )
         };
         assert!(
@@ -275,6 +340,25 @@ mod tests {
         assert!(
             !unsafe { clave_mac_can_access_volume(std::ptr::null()) },
             "a null token denies"
+        );
+    }
+
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn authorize_open_denies_supervised_writes_outside_the_mount() {
+        crate::es_gate::set_mount_prefix("/Volumes/ClaveDisk");
+        crate::es_gate::set_allow_save_outside_enclave(false);
+        let token = [0xC0u32, 0xC1, 0xC2, 0xC3, 0xC4, 0xC5, 0xC6, 0xC7];
+        zones().join(ProcId::macos(token), JoinReason::Launcher);
+        let ptr = token.as_ptr();
+        let desktop = std::ffi::CString::new("/Users/alice/Desktop/leak.pdf").unwrap();
+        assert!(
+            !unsafe { clave_mac_authorize_open(ptr, desktop.as_ptr(), true) },
+            "supervised write outside the mount is denied"
+        );
+        assert!(
+            unsafe { clave_mac_authorize_open(ptr, desktop.as_ptr(), false) },
+            "supervised read outside the mount is allowed"
         );
     }
 }

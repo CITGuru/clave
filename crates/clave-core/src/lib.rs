@@ -17,11 +17,14 @@ pub use app::{
 pub use audit::{AuditAction, AuditEvent, AuditSink, NoopAuditSink};
 pub use decide::{clip_decision, decide, Access, Action, Reason, Verdict};
 pub use learn::{LearnSession, LearnedProfile, Observation};
-pub use net::classify_flow;
+pub use net::{
+    classify_dns_flow, classify_flow, decide_dns, DnsDecision, DnsSteering, ForwardMode,
+    Forwarding, NetworkProvider, ProviderError,
+};
 pub use overlay::{
     recompute_frames, recompute_frames_themed, BorderCfg, Frame, RectPx, WindowGeom,
 };
-pub use path::{classify_path, PathClass};
+pub use path::{classify_path, is_under_mount, PathClass};
 pub use policy::{
     ClipboardPolicy, FilePolicy, NetworkPolicy, OverlayPolicy, PolicyBundle, UnixTime,
 };

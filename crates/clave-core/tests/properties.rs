@@ -96,7 +96,7 @@ proptest! {
     ) {
         let bin = BinaryMatch::Macos { team_id: team, signing_id: signing };
         let apps = AppPolicy { allow: vec![AppRule::new(AppId("x".into()), bin.clone())] };
-        let v = classify_exec(&bin, parent, &apps);
+        let v = classify_exec(&bin, false, parent, &apps);
         prop_assert!(v.joins_zone);
         prop_assert_eq!(v.matched, Some(AppId("x".into())));
     }
@@ -108,7 +108,7 @@ proptest! {
         parent in any::<bool>(),
     ) {
         let bin = BinaryMatch::Macos { team_id: team, signing_id: signing };
-        let v = classify_exec(&bin, parent, &AppPolicy::empty());
+        let v = classify_exec(&bin, false, parent, &AppPolicy::empty());
         prop_assert_eq!(v.joins_zone, parent);
         prop_assert!(v.matched.is_none());
     }

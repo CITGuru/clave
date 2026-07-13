@@ -1,19 +1,3 @@
-//! Drives the real screen watch against a real screenshot.
-//!
-//! Unit tests cover the state machine; this exercises the OS half — process enumeration and the
-//! CGWindowList work-window check:
-//!
-//! 1. treat the frontmost app as a work app whose window is on screen,
-//! 2. take an actual screenshot with `/usr/sbin/screencapture`,
-//! 3. the watch must report it — a capture taken over work content.
-//!
-//! It also asserts the converse: with no work window on screen, a screenshot is *not* reported.
-//! A screenshot of a purely personal desktop is never instrumented (doc 01).
-//!
-//! ```sh
-//! cargo run -p clave-mac --example screen_live
-//! ```
-
 use clave_core::{JoinReason, ZoneRegistry};
 use clave_mac::{CaptureWatch, Capturer};
 use clave_platform::ProcId;
@@ -26,14 +10,10 @@ fn proc_id(pid: u32) -> ProcId {
     ProcId::macos(token)
 }
 
-/// Take a real screenshot, and sample the running capture tooling while it is alive.
-///
-/// `screencapture` is short-lived, so poll during the capture rather than after it — exactly the
-/// race the module docs call out.
 fn screenshot_and_sample() -> Vec<Capturer> {
     let out = std::env::temp_dir().join("clave-screen-live.png");
     let mut child = Command::new("/usr/sbin/screencapture")
-        .arg("-x") // no shutter sound
+        .arg("-x")
         .arg(&out)
         .spawn()
         .expect("screencapture");
@@ -54,8 +34,6 @@ fn screenshot_and_sample() -> Vec<Capturer> {
 fn main() {
     let zones = Arc::new(ZoneRegistry::new());
 
-    // This process is a GUI-less binary, so it owns no window. Use the frontmost app as the stand-in
-    // "work app with a window on screen" — the same thing the clipboard guard keys off.
     let Some(front) = clave_mac::frontmost_app_pid() else {
         eprintln!("no frontmost app (run this with a GUI session)");
         std::process::exit(1);
@@ -86,14 +64,12 @@ fn main() {
     );
     println!("  reported over work content: {reported:?}");
 
-    // Reported once, not once per poll — a single screenshot must not flood the audit chain.
     assert!(
         watch.observe(&running, true).is_empty(),
         "the same capture must not be reported twice"
     );
     println!("  and not re-reported on the next poll");
 
-    // The converse: no work content on screen ⇒ not our business.
     let mut watch = CaptureWatch::new();
     assert!(
         watch.observe(&running, false).is_empty(),

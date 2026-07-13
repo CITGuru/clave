@@ -1,14 +1,14 @@
 use std::sync::{Arc, Mutex};
 
 use clave_core::{
-    Action, AppId, AppRule, AuditAction, BinaryMatch, JoinReason, LaunchProfile, OverlayPolicy,
-    PathClass, PolicyBundle,
+    Action, AppId, AppRule, AuditAction, BinaryMatch, DnsDecision, DnsSteering, ForwardMode,
+    JoinReason, LaunchProfile, NetworkProvider, OverlayPolicy, PathClass, PolicyBundle,
 };
 use clave_daemon::{
     Checkpoint, CheckpointStore, Daemon, DaemonEvent, FileCheckpointStore, GatewayError,
     GatewaySync, MemCheckpointStore, PolicyError,
 };
-use clave_net::{FlowDisposition, LoopbackTunnel, Outbound};
+use clave_net::{FlowDisposition, Inbound, LoopbackTunnel, Outbound, Tunnel, TunnelOut};
 use clave_platform::{
     Capability, ClipFormat, Decision, EnforcementStatus, ProcId, Rgba, Route, WindowId, Zone,
 };
@@ -87,6 +87,50 @@ fn make() -> (Arc<Daemon>, MockPlatform, RecordingAuditSink) {
     (daemon, handle, audit)
 }
 
+struct OfflineTunnel;
+
+impl Tunnel for OfflineTunnel {
+    fn encapsulate(&mut self, ip_packet: &[u8]) -> TunnelOut {
+        if ip_packet.is_empty() {
+            TunnelOut::Idle
+        } else {
+            TunnelOut::SendToGateway(vec![0xFF])
+        }
+    }
+    fn decapsulate(&mut self, _datagram: &[u8]) -> Inbound {
+        Inbound::Idle
+    }
+    fn is_established(&self) -> bool {
+        false
+    }
+}
+
+fn offline_daemon() -> Arc<Daemon> {
+    let platform = MockPlatform::new();
+    let zones = Arc::clone(&platform.zones);
+    let spool = Arc::new(AuditSpool::with_sink(Arc::new(RecordingAuditSink::new())));
+    let id = ContainerId(0xC1A5_ED15);
+    let keystore = Arc::new(MemKeyStore::new());
+    keystore.provision(
+        id,
+        Kek::from_bytes([0x4B; 32]),
+        &Dek::from_bytes([0xDE; 64]),
+    );
+    let backing = Arc::new(MemBacking::zeroed(64));
+    let volume = ClaveVolume::new(ContainerMeta::new(id), keystore, backing, zones.clone());
+    let signer = GatewaySigningKey::from_seed(TenantId(1), [0x6A; 32]);
+    let gateway = GatewayVerifier::new(TenantId(1), signer.public_key()).unwrap();
+    Arc::new(Daemon::new(
+        zones,
+        Box::new(platform),
+        spool,
+        PolicyBundle::restrictive_default(),
+        Box::new(OfflineTunnel),
+        Arc::new(Mutex::new(volume)),
+        gateway,
+    ))
+}
+
 #[test]
 fn work_window_is_tracked_by_clave_edge_and_screen_protected() {
     let (daemon, h, _audit) = make();
@@ -150,6 +194,120 @@ fn work_egress_denylist_blocks() {
 
     assert_eq!(daemon.route_flow(&work, "evil.example"), Route::Block);
     assert_eq!(daemon.route_flow(&work, "good.example"), Route::Tunnel);
+}
+
+#[test]
+fn dns_steering_follows_the_provider_policy() {
+    let (daemon, _h, _audit) = make();
+    let work = pid(10);
+    daemon.on_zone_join(work, JoinReason::Launcher, 1);
+
+    assert_eq!(
+        daemon.dns_decision(&work, "intra.corp"),
+        DnsDecision::Personal
+    );
+
+    let mut pol = PolicyBundle::restrictive_default();
+    pol.version = 1;
+    pol.network.providers = vec![NetworkProvider {
+        id: "cisco-umbrella".into(),
+        display_name: "Cisco Umbrella (DNS)".into(),
+        mode: ForwardMode::Dns,
+        endpoints: Vec::new(),
+        static_egress_ip: None,
+        dns: Some(DnsSteering {
+            resolvers: vec!["208.67.222.222".into()],
+            match_domains: Vec::new(),
+            steer_all: true,
+        }),
+        params: Default::default(),
+    }];
+    daemon.update_policy(pol).unwrap();
+
+    assert_eq!(daemon.dns_decision(&work, "intra.corp"), DnsDecision::Steer);
+    assert_eq!(
+        daemon.dns_decision(&pid(99), "intra.corp"),
+        DnsDecision::Personal
+    );
+}
+
+#[test]
+fn split_horizon_dns_flow_tunnels_work_names_only() {
+    let (daemon, _h, _audit) = make();
+    let work = pid(10);
+    daemon.on_zone_join(work, JoinReason::Launcher, 1);
+
+    let mut pol = PolicyBundle::restrictive_default();
+    pol.version = 1;
+    pol.network.providers = vec![NetworkProvider {
+        id: "corp-dns".into(),
+        display_name: "Corporate split-horizon resolver".into(),
+        mode: ForwardMode::Dns,
+        endpoints: Vec::new(),
+        static_egress_ip: None,
+        dns: Some(DnsSteering {
+            resolvers: vec!["10.0.0.53".into()],
+            match_domains: vec!["corp.example".into()],
+            steer_all: false,
+        }),
+        params: Default::default(),
+    }];
+    daemon.update_policy(pol).unwrap();
+
+    assert_eq!(
+        daemon.open_dns_flow(1, &work, "git.corp.example"),
+        FlowDisposition::Tunnel
+    );
+    assert!(matches!(
+        daemon.flow_outbound(1, b"dns-query"),
+        Outbound::ToGateway(_)
+    ));
+
+    assert_eq!(
+        daemon.open_dns_flow(2, &work, "news.example.com"),
+        FlowDisposition::Direct
+    );
+    assert!(matches!(
+        daemon.flow_outbound(2, b"dns-query"),
+        Outbound::PassThrough
+    ));
+
+    assert_eq!(
+        daemon.open_dns_flow(3, &pid(99), "git.corp.example"),
+        FlowDisposition::Direct
+    );
+}
+
+#[test]
+fn work_flows_fail_closed_when_the_tunnel_is_down() {
+    let daemon = offline_daemon();
+    let work = pid(10);
+    daemon.on_zone_join(work, JoinReason::Launcher, 1);
+
+    assert!(!daemon.network_link_is_up());
+
+    assert_eq!(
+        daemon.open_flow(1, &work, "intra.corp"),
+        FlowDisposition::HeldOffline
+    );
+    assert!(matches!(
+        daemon.flow_outbound(1, b"work-data"),
+        Outbound::ToGateway(_)
+    ));
+
+    assert_eq!(
+        daemon.open_dns_flow(2, &work, "intra.corp"),
+        FlowDisposition::HeldOffline
+    );
+
+    assert_eq!(
+        daemon.open_flow(3, &pid(99), "news.example"),
+        FlowDisposition::Direct
+    );
+    assert!(matches!(
+        daemon.flow_outbound(3, b"portal-auth"),
+        Outbound::PassThrough
+    ));
 }
 
 #[test]
@@ -1038,7 +1196,7 @@ fn allowlisted_exec_joins_the_zone_and_is_audited() {
     daemon.update_policy(pol).unwrap();
 
     let proc = pid(50);
-    let verdict = daemon.on_exec(proc, None, &chrome_work(), 1);
+    let verdict = daemon.on_exec(proc, None, &chrome_work(), false, 1);
 
     assert!(verdict.joins_zone);
     assert_eq!(verdict.matched, Some(AppId("chrome-work".into())));
@@ -1057,7 +1215,7 @@ fn unlisted_exec_stays_personal() {
         signing_id: "com.personal.app".into(),
     };
     let proc = pid(51);
-    let verdict = daemon.on_exec(proc, None, &personal, 1);
+    let verdict = daemon.on_exec(proc, None, &personal, false, 1);
 
     assert!(!verdict.joins_zone);
     assert!(
@@ -1077,7 +1235,7 @@ fn child_of_a_supervised_process_inherits_membership() {
         signing_id: "com.unlisted.helper".into(),
     };
 
-    let verdict = daemon.on_exec(child, Some(parent), &helper, 2);
+    let verdict = daemon.on_exec(child, Some(parent), &helper, false, 2);
     assert!(
         verdict.joins_zone,
         "a child of a supervised process inherits"

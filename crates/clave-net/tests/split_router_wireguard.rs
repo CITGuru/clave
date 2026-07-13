@@ -78,8 +78,9 @@ fn device_initiated_session_round_trips_data_through_the_router() {
 
     assert_eq!(
         router.open_flow(1, &work, &zones, false),
-        FlowDisposition::Tunnel
+        FlowDisposition::HeldOffline
     );
+    assert!(!router.link_is_up());
 
     let init = match router.outbound(1, &ipv4_packet(b"warmup")) {
         Outbound::ToGateway(d) => d,
@@ -91,6 +92,15 @@ fn device_initiated_session_round_trips_data_through_the_router() {
         _ => panic!("gateway should reply to the initiation"),
     };
     let _ = router.inbound(&response);
+
+    assert!(
+        router.link_is_up(),
+        "the completed handshake brings the link up"
+    );
+    assert_eq!(
+        router.open_flow(2, &work, &zones, false),
+        FlowDisposition::Tunnel
+    );
 
     let packet = ipv4_packet(b"the quick brown fox");
     let ciphertext = match router.outbound(1, &packet) {

@@ -7,7 +7,7 @@ use serde::{de::DeserializeOwned, Deserialize, Serialize};
 #[cfg(unix)]
 pub mod transport;
 
-pub const PROTO_VERSION: u16 = 3;
+pub const PROTO_VERSION: u16 = 4;
 
 pub const MAX_FRAME: usize = 1 << 20;
 
@@ -43,6 +43,7 @@ pub enum LauncherReply {
     Apps { apps: Vec<LaunchableApp> },
     LaunchSpec { spec: Option<LaunchSpec> },
     Launched { pid: Option<u32> },
+    LaunchFailed { error: String },
     Enforcement { caps: Vec<(String, String)> },
 }
 
