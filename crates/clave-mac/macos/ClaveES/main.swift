@@ -1,10 +1,3 @@
-// ClaveES — containing app for the Endpoint Security System Extension.
-//
-// Its only job in this dev scaffold is lifecycle: request activation of the ES extension
-// (OSSystemExtensionRequest) and surface the result. In production this role is filled by the
-// privileged launchd daemon / menu-bar controller (doc 14 §1.1); here it is a minimal AppKit app
-// so the extension can be loaded and iterated on a SIP-disabled dev Mac.
-
 import AppKit
 import OSLog
 import SystemExtensions
@@ -34,7 +27,6 @@ final class ExtensionManager: NSObject, OSSystemExtensionRequestDelegate {
         OSSystemExtensionManager.shared.submitRequest(request)
     }
 
-    // Replacing an already-installed build: always take the new one during development.
     func request(
         _ request: OSSystemExtensionRequest,
         actionForReplacingExtension existing: OSSystemExtensionProperties,
@@ -57,7 +49,6 @@ final class ExtensionManager: NSObject, OSSystemExtensionRequestDelegate {
     }
 }
 
-// A trivial AppKit shell: one window with Activate / Deactivate buttons.
 final class AppDelegate: NSObject, NSApplicationDelegate {
     var window: NSWindow!
 

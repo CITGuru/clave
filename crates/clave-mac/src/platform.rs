@@ -1,10 +1,4 @@
-//! [`MacPlatform`] — the daemon-side macOS [`Platform`] adapter.
-//!
-//! Process supervision (the ES-fed zone mirror) and network split-tunnel (the shared `clave-net`
-//! classifier) are wired to real decision logic; the rest are honest stubs. [`Platform::enforcement`]
-//! reports each capability's true posture — nothing here reaches `Enforced`: the ES/NE paths are
-//! `DevelopmentOnly` (need entitlements / a SIP-disabled Mac), the unbuilt subsystems `Unavailable`.
-
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use clave_core::ZoneRegistry;
@@ -15,8 +9,8 @@ use clave_platform::{
 };
 
 use crate::sip::SipStatus;
+use crate::volume::MacVolumeMount;
 
-/// Split-tunnel routing via the shared classifier — the same decision as Windows and the FFI path.
 pub struct MacNetwork {
     zones: Arc<ZoneRegistry>,
 }
@@ -27,36 +21,11 @@ impl NetworkTunnel for MacNetwork {
     }
 }
 
-/// The encrypted-volume mount (encrypted APFS / sparsebundle) — not built yet. A lab build may set a
-/// dev mount point so contained launch specs resolve before the real mount exists; the volume's
-/// [`EnforcementStatus`] stays `Unavailable`.
-#[derive(Default)]
-pub struct MacVolumeMount {
-    dev_mount_point: Option<String>,
-}
-
-impl VolumeMount for MacVolumeMount {
-    fn is_mounted(&self) -> bool {
-        self.dev_mount_point.is_some()
-    }
-    fn mount_point(&self) -> Option<String> {
-        self.dev_mount_point.clone()
-    }
-    fn request_wipe(&self) -> PResult<()> {
-        // The authoritative crypto-shred is the volume core's job (`clave-volume`); with no OS
-        // mount there is nothing to tear down here.
-        Ok(())
-    }
-}
-
-/// Clipboard DLP — the macOS broker is Phase 5. No enforcement yet.
 #[derive(Default)]
 pub struct MacClipboard;
 
 impl ClipboardBroker for MacClipboard {
     fn classify_and_gate(&self, src: Zone, dst: Zone, _fmt: ClipFormat) -> Decision {
-        // Fail-closed: with no broker installed we cannot enforce the nuanced policy matrix, so
-        // allow same-zone and deny cross-zone. (The real broker consults the policy.)
         if src == dst {
             Decision::Allow
         } else {
@@ -65,30 +34,23 @@ impl ClipboardBroker for MacClipboard {
     }
 }
 
-/// Screen-capture protection — Phase 5. No protection yet.
 #[derive(Default)]
 pub struct MacScreen;
 
 impl ScreenGuard for MacScreen {
     fn protect_window(&self, _w: WindowId) -> PResult<()> {
-        Ok(()) // best-effort no-op until the Phase-5 ScreenCaptureKit path exists
+        Ok(())
     }
 }
 
-/// Windows explicitly tracked as work windows (via the shim/ES path) plus the color to frame each
-/// with. Shared (`Arc`) so the native drawer can read the current set.
 pub type TrackedWindows = Arc<Mutex<std::collections::HashMap<WindowId, Rgba>>>;
 
-/// Clave Edge overlay bookkeeping: the explicitly-tracked window set. The pixels are drawn by the
-/// native drawer, which also discovers launched-app windows by owner pid. A dev-grade affordance,
-/// never `Enforced`.
 #[derive(Clone, Default)]
 pub struct MacOverlay {
     tracked: TrackedWindows,
 }
 
 impl MacOverlay {
-    /// The shared handle to the tracked-window set, for a native drawer to read.
     pub fn tracked_handle(&self) -> TrackedWindows {
         Arc::clone(&self.tracked)
     }
@@ -109,7 +71,6 @@ impl WindowOverlay for MacOverlay {
     }
 }
 
-/// Input isolation — Phase 6, optional. Not protected.
 #[derive(Default)]
 pub struct MacInput;
 
@@ -119,12 +80,10 @@ impl InputGuard for MacInput {
     }
 }
 
-/// The macOS platform adapter, built around the daemon's shared zone mirror (`zones`), which the
-/// ES System Extension feeds over XPC in production (deferred). See the module docs.
 pub struct MacPlatform {
     zones: Arc<ZoneRegistry>,
     network: MacNetwork,
-    volume: MacVolumeMount,
+    volume: Arc<MacVolumeMount>,
     clipboard: MacClipboard,
     screen: MacScreen,
     overlay: MacOverlay,
@@ -133,8 +92,6 @@ pub struct MacPlatform {
 }
 
 impl MacPlatform {
-    /// Build the adapter around `zones` — the daemon's mirror, shared so one membership set governs
-    /// both routing and the access gate (as `MockPlatform` does in tests).
     pub fn new(zones: Arc<ZoneRegistry>) -> Self {
         let network = MacNetwork {
             zones: Arc::clone(&zones),
@@ -142,7 +99,7 @@ impl MacPlatform {
         Self {
             zones,
             network,
-            volume: MacVolumeMount::default(),
+            volume: Arc::new(MacVolumeMount::default()),
             clipboard: MacClipboard,
             screen: MacScreen,
             overlay: MacOverlay::default(),
@@ -151,9 +108,6 @@ impl MacPlatform {
         }
     }
 
-    /// Reconcile the ES/NE posture with the machine's live SIP state, returning the applied
-    /// [`SipStatus`]. The dev enforcement path is an unsigned extension that only loads on a
-    /// SIP-disabled Mac: SIP disabled → `DevelopmentOnly`, else `Unavailable`. Never `Enforced`.
     pub fn apply_sip_posture(&self, sip: SipStatus) -> SipStatus {
         let status = if sip.is_disabled() {
             EnforcementStatus::DevelopmentOnly
@@ -165,30 +119,33 @@ impl MacPlatform {
         sip
     }
 
-    /// Detect the live SIP state and apply it via [`MacPlatform::apply_sip_posture`].
     pub fn detect_and_apply_sip_posture(&self) -> SipStatus {
         self.apply_sip_posture(SipStatus::detect())
     }
 
-    /// The shared zone mirror — the native Clave Edge drawer reads `supervised_pids()` from it to
-    /// pick which on-screen windows to frame.
     pub fn zones(&self) -> Arc<ZoneRegistry> {
         Arc::clone(&self.zones)
     }
 
-    /// The shared handle to the explicitly-tracked window set (shim/ES `WindowCreated` path).
     pub fn overlay_tracked(&self) -> TrackedWindows {
         self.overlay.tracked_handle()
     }
 
-    /// Set a dev Clave Disk mount point so a lab daemon can resolve contained launch specs before the
-    /// real mount exists. Does not promote the volume's enforcement posture (stays `Unavailable`).
-    pub fn set_dev_mount_point(&mut self, path: impl Into<String>) {
-        self.volume.dev_mount_point = Some(path.into());
+    /// Point the volume at a real container/bundle target, replacing the unconfigured default. A
+    /// lab `main.rs` calls this before boxing the platform into `Daemon::new`, then attaches
+    /// through the handle returned by [`MacPlatform::volume_mac`] (grabbed *before* boxing — the
+    /// `Arc` mirrors `overlay_tracked`'s pattern so the concrete mount stays reachable afterward).
+    pub fn configure_volume(&mut self, container: u128, bundle_path: impl Into<PathBuf>) {
+        self.volume = Arc::new(MacVolumeMount::new(container, bundle_path));
     }
 
-    /// Update a capability's reported posture (a production adapter calls this as it detects
-    /// extensions connecting, entitlements, SIP state, etc.).
+    /// The concrete mount, for the mac-specific `attach`/`detach`/`container_id` calls the
+    /// `VolumeMount` trait doesn't expose. Cloning the `Arc` keeps it reachable after `MacPlatform`
+    /// is boxed into `Box<dyn Platform>`.
+    pub fn volume_mac(&self) -> Arc<MacVolumeMount> {
+        Arc::clone(&self.volume)
+    }
+
     pub fn set_enforcement(&self, cap: Capability, status: EnforcementStatus) {
         for e in self
             .enforcement
@@ -203,13 +160,16 @@ impl MacPlatform {
     }
 }
 
-/// Honest defaults: the ES/NE paths are `DevelopmentOnly`; the unbuilt subsystems are `Unavailable`.
 fn default_enforcement() -> [(Capability, EnforcementStatus); Capability::COUNT] {
     use Capability::*;
     use EnforcementStatus::*;
     [
         (ProcessSupervision, DevelopmentOnly),
-        (Volume, Unavailable),
+        // Real hdiutil AES-256 sparsebundle, Secure-Enclave-sealed passphrase on the signed launch
+        // path (volume.rs + se_seal.rs) — genuine OS-native encryption, hardware key custody, and
+        // crypto-shred, but not yet ES `AUTH_OPEN`-gated, so `DevelopmentOnly` not `Enforced`
+        // (doc 04 §4).
+        (Volume, DevelopmentOnly),
         (Clipboard, Unavailable),
         (Network, DevelopmentOnly),
         (Screen, Unavailable),
@@ -223,7 +183,7 @@ impl Platform for MacPlatform {
         &*self.zones
     }
     fn volume(&self) -> &dyn VolumeMount {
-        &self.volume
+        &*self.volume
     }
     fn clipboard(&self) -> &dyn ClipboardBroker {
         &self.clipboard
@@ -265,7 +225,6 @@ mod tests {
     fn supervisor_and_network_share_the_zone_mirror() {
         let p = platform();
         let work = ProcId::macos([1, 2, 3, 4, 5, 6, 7, 8]);
-        // Personal until the ES client seeds membership → never inspected, routes Direct.
         assert!(!p.supervisor().is_supervised(&work));
         assert_eq!(p.network().route(&work, false), Route::Direct);
 
@@ -283,7 +242,6 @@ mod tests {
             !r.is_production_ready(),
             "a dev/scaffold adapter is never production-ready"
         );
-        // Wired but dev-grade:
         assert_eq!(
             r.status(Capability::ProcessSupervision),
             EnforcementStatus::DevelopmentOnly
@@ -292,8 +250,10 @@ mod tests {
             r.status(Capability::Network),
             EnforcementStatus::DevelopmentOnly
         );
-        // Unbuilt subsystems:
-        assert_eq!(r.status(Capability::Volume), EnforcementStatus::Unavailable);
+        assert_eq!(
+            r.status(Capability::Volume),
+            EnforcementStatus::DevelopmentOnly
+        );
         assert_eq!(
             r.status(Capability::Clipboard),
             EnforcementStatus::Unavailable
@@ -319,8 +279,6 @@ mod tests {
     #[test]
     fn sip_enabled_without_entitlement_makes_es_ne_paths_unavailable() {
         let p = platform();
-        // SIP on and no entitled extension connected: an unsigned dev extension can't load, so the
-        // honest posture is that nothing can enforce these yet.
         for sip in [SipStatus::Enabled, SipStatus::Unknown] {
             p.apply_sip_posture(sip);
             let r = p.enforcement_report();
@@ -328,7 +286,10 @@ mod tests {
                 r.status(Capability::ProcessSupervision),
                 EnforcementStatus::Unavailable
             );
-            assert_eq!(r.status(Capability::Network), EnforcementStatus::Unavailable);
+            assert_eq!(
+                r.status(Capability::Network),
+                EnforcementStatus::Unavailable
+            );
         }
     }
 
@@ -350,8 +311,6 @@ mod tests {
     #[test]
     fn enforcement_can_be_promoted_at_runtime() {
         let p = platform();
-        // A production adapter never does this on a SIP-off box, but the mechanism exists for when
-        // a capability genuinely reaches production posture.
         for cap in Capability::ALL {
             p.set_enforcement(cap, EnforcementStatus::Enforced);
         }

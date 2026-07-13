@@ -15,6 +15,7 @@ members = [
     "crates/clave-cli",
     "crates/clave-testkit",
     "crates/clave-daemon",
+    "crates/clave-daemon-host",
     "crates/clave-net",
     "crates/clave-volume",
     "crates/clave-mac",

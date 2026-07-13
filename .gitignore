@@ -16,3 +16,7 @@ src-tauri/gen/
 # Xcode build output for the macOS System Extension host
 crates/clave-mac/macos/build/
 xcuserdata/
+# XcodeGen-generated project (regenerate with `xcodegen generate`)
+*.xcodeproj
+# Local signing/provisioning state + blocker tracking (account-specific; not for the repo)
+crates/clave-mac/macos/XCODE_NOTES.local.md

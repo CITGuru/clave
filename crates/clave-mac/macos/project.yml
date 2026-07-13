@@ -1,16 +1,21 @@
-# XcodeGen spec for the Clave macOS Endpoint Security host.
+# XcodeGen spec for Clave's signed macOS hosts: the Endpoint Security client and the real,
+# Secure-Enclave-capable daemon launcher.
 #
 # Regenerate the .xcodeproj with:  xcodegen generate   (run from this directory)
 #
-# This produces two targets:
-#   * ClaveES           — a minimal containing app that activates the system extension.
-#   * ClaveESExtension  — the Endpoint Security System Extension; links the Rust core
-#                         (libclave_mac.a) and enforces the portable core's verdicts.
+# Three targets:
+#   * ClaveES           — containing app that activates the ES System Extension.
+#   * ClaveESExtension  — the Endpoint Security client; links libclave_mac.a and enforces the
+#                         portable core's verdicts. Self-signed — see below.
+#   * ClaveDaemonHost   — the real, signed launch path for clave-daemon; links
+#                         libclave_daemon_host.a. The only binary that can reach the Secure
+#                         Enclave (se_seal.rs).
 #
-# LOCAL DEV ONLY: signed by the self-signed "Clave Dev Code Signing" identity and run on a
-# SIP-disabled Mac (Track C, doc 14 §2.3). The restricted ES entitlement is honored only because
-# SIP is off. This is NOT a shippable signing path — production needs a Developer ID + Apple's
-# approved ES entitlement on a stock, SIP-enabled Mac (doc 14 §1, §5.4).
+# LOCAL DEV ONLY. See XCODE_NOTES.local.md (gitignored) for current signing state and blockers —
+# in short: ClaveESExtension's ES entitlement rides SIP-disabled AMFI leniency on a self-signed
+# cert (Track C, doc 14 §2.3), not a shippable path; ClaveES's System Extension activation is
+# blocked until the paid Apple Developer Program is active; ClaveDaemonHost already works on the
+# free tier.
 
 name: ClaveES
 options:
@@ -21,9 +26,6 @@ options:
 
 settings:
   base:
-    CODE_SIGN_STYLE: Manual
-    CODE_SIGN_IDENTITY: "Clave Dev Code Signing"
-    DEVELOPMENT_TEAM: ""
     ENABLE_HARDENED_RUNTIME: YES
     SWIFT_VERSION: "5.0"
     # The Rust staticlib is emitted to the workspace target dir (three levels up from here).
@@ -31,6 +33,13 @@ settings:
 
 targets:
   # ---------------------------------------------------------------------------
+  # Container app: a real, Apple-issued "Apple Development" cert + a real (auto-fetched)
+  # provisioning profile. system-extension.install is a plain, non-restricted capability any
+  # account can provision, so Automatic signing can get a real profile-backed identity here —
+  # required both for AMFI to launch it (a CA-chain-rooted cert with no matching profile is
+  # REJECTED at launch, error -413, even with SIP disabled — that leniency only covers
+  # self-signed/ad-hoc-rooted code) and for sysextd's own SecTrust check on the app that submits
+  # the OSSystemExtensionRequest (only a Team-ID-bearing identity passes that gate).
   ClaveES:
     type: application
     platform: macOS
@@ -42,12 +51,23 @@ targets:
         INFOPLIST_FILE: ClaveES/Info.plist
         CODE_SIGN_ENTITLEMENTS: ClaveES/ClaveES.entitlements
         LD_RUNPATH_SEARCH_PATHS: "$(inherited) @executable_path/../Frameworks"
+        CODE_SIGN_STYLE: Automatic
+        DEVELOPMENT_TEAM: B6MKLUGY37
     dependencies:
       - target: ClaveESExtension
         embed: true
-        codeSign: true
+        # Don't let the container's real-cert signing re-sign the extension on embed — the
+        # extension keeps its own self-signed identity (see below); we sign both by hand anyway.
+        codeSign: false
 
   # ---------------------------------------------------------------------------
+  # The ES System Extension itself: com.apple.developer.endpoint-security.client is a *restricted*
+  # entitlement no free (or unapproved paid) account can ever get a matching profile for, so a
+  # real cert would hit the same -413 AMFI rejection with no way out. Keep it on the self-signed
+  # "Clave Dev Code Signing" identity instead — SIP-disabled AMFI is lenient about entitlement
+  # legitimacy for self-signed/ad-hoc-rooted code specifically (Track C, doc 14 §2.3). It only
+  # needs to pass AMFI at load time, not sysextd's activation-time SecTrust check — that check
+  # runs against the container app's identity, not the extension's.
   ClaveESExtension:
     type: system-extension
     platform: macOS
@@ -58,6 +78,9 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: com.clave.ClaveES.ESClient
         INFOPLIST_FILE: ClaveESExtension/Info.plist
         CODE_SIGN_ENTITLEMENTS: ClaveESExtension/ClaveESExtension.entitlements
+        CODE_SIGN_STYLE: Manual
+        CODE_SIGN_IDENTITY: "Clave Dev Code Signing"
+        DEVELOPMENT_TEAM: ""
         # Link the Rust core + every system lib its staticlib pulls in (from
         # `--print native-static-libs`), plus the Endpoint Security C library.
         LIBRARY_SEARCH_PATHS: "$(inherited) $(CLAVE_RUST_LIB_DIR)"
@@ -81,3 +104,44 @@ targets:
           # Cargo lives outside Xcode's PATH under some launch contexts.
           export PATH="$HOME/.cargo/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
           cargo build -p clave-mac --release
+
+  # ---------------------------------------------------------------------------
+  # The signed macOS app that actually runs clave-daemon — the only launch path AMFI lets touch
+  # the Secure Enclave (se_seal.rs needs `keychain-access-groups`, which — unlike System Extension
+  # capability — *is* provisionable on a free personal team, confirmed via this exact target).
+  # Links `libclave_daemon_host.a` (crates/clave-daemon-host, the FFI shim) and calls straight into
+  # clave-daemon's real startup (main.swift). `application`, not `tool`: Xcode's Signing &
+  # Capabilities "+ Capability" list (Keychain Sharing included) is only offered for app-bundle
+  # targets.
+  ClaveDaemonHost:
+    type: application
+    platform: macOS
+    sources:
+      - ClaveDaemonHost
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.clave.daemon
+        INFOPLIST_FILE: ClaveDaemonHost/Info.plist
+        CODE_SIGN_ENTITLEMENTS: ClaveDaemonHost/ClaveDaemonHost.entitlements
+        CODE_SIGN_STYLE: Automatic
+        DEVELOPMENT_TEAM: B6MKLUGY37
+        LIBRARY_SEARCH_PATHS: "$(inherited) $(CLAVE_RUST_LIB_DIR)"
+        OTHER_LDFLAGS: >-
+          $(inherited)
+          -lclave_daemon_host
+          -lobjc
+          -liconv
+          -framework AppKit
+          -framework QuartzCore
+          -framework Foundation
+          -framework CoreGraphics
+          -framework CoreFoundation
+          -framework Security
+    preBuildScripts:
+      - name: Build Rust daemon (libclave_daemon_host.a)
+        basedOnDependencyAnalysis: false
+        script: |
+          set -euo pipefail
+          cd "$PROJECT_DIR/../../.."
+          export PATH="$HOME/.cargo/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
+          cargo build -p clave-daemon-host --release

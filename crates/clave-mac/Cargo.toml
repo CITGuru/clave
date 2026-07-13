@@ -17,8 +17,19 @@ clave-core = { path = "../clave-core" }
 clave-net = { path = "../clave-net" }
 serde_json = "1"
 
-# The native Clave Edge overlay (AppKit + CGWindowList) is macOS-only; gated so the crate still
-# builds on Linux/Windows CI.
+# The native Clave Edge overlay (AppKit + CGWindowList) and the encrypted-volume mount
+# (hdiutil + Keychain + Secure Enclave sealing) are macOS-only; gated so the crate still builds on
+# Linux/Windows CI.
 [target.'cfg(target_os = "macos")'.dependencies]
 cocoa = "0.26"
 objc = "0.2"
+security-framework = { version = "3", features = ["OSX_10_15"] }
+security-framework-sys = "2"
+core-foundation = "0.10"
+getrandom = "0.2"
+# AES-KW (RFC 3394) wrap/unwrap for the SE-sealed passphrase (doc 04 §4.1) — same crate and
+# construction as clave-volume's KEK→DEK hierarchy, kept local here rather than depending on
+# clave-volume's DEK type, whose raw bytes are deliberately `pub(crate)`-confined to XTS use.
+aes-kw = "0.2"
+aes = "0.8"
+sha2 = "0.10"

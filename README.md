@@ -46,9 +46,10 @@ The security-critical logic lives in one portable core that runs and is fully te
 | `clave-cli`      | Admin/diagnostics: enforcement posture, classifier dry-runs, launcher `apps`/`launch`                                  |
 | `clave-testkit`  | In-memory `MockPlatform` + recording audit sink                                                                        |
 | `clave-daemon`   | Hosts the core; tokio loop; flow data plane + IPC bridge + launcher bridge + device-side enrollment client             |
+| `clave-daemon-host` | macOS-only `#[no_mangle]` FFI shim: the signed `ClaveDaemonHost` app's entry into `clave-daemon` (kept out of `clave-daemon`, which forbids unsafe code) |
 | `clave-net`      | `SplitRouter` flow routing + `Tunnel` seam + boringtun WireGuard data plane (feature `wireguard`)                      |
 | `clave-volume`   | Encrypted Clave Disk crypto core: AES-256-XTS, KEK/DEK hierarchy, crypto-shred wipe, X25519 enrollment sealed-box      |
-| `clave-mac`      | macOS adapter: `MacPlatform` + ES/NE C ABI (+ Swift scaffolds)                                                         |
+| `clave-mac`      | macOS adapter: `MacPlatform` + ES/NE C ABI + Secure-Enclave-sealed volume passphrase (+ Swift scaffolds)               |
 | `clave-win`      | Windows adapter: `WindowsPlatform` + shared routing (+ WFP/minifilter scaffold)                                        |
 
 

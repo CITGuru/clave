@@ -7,8 +7,9 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		318CBF881595601BE5D96D62 /* main.swift in Sources */ = {isa = PBXBuildFile; fileRef = 987314572BDB8964A7024F47 /* main.swift */; };
 		402005A5605B82A9B8FA8847 /* main.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1F6C90EA132D60BC6CED479E /* main.swift */; };
-		6C699B232AF25F27E38AFAFA /* ClaveESExtension.systemextension in Embed System Extensions */ = {isa = PBXBuildFile; fileRef = 5FBF611836DAB4D24BAEC379 /* ClaveESExtension.systemextension */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
+		6C699B232AF25F27E38AFAFA /* ClaveESExtension.systemextension in Embed System Extensions */ = {isa = PBXBuildFile; fileRef = 5FBF611836DAB4D24BAEC379 /* ClaveESExtension.systemextension */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		6C830529B6642665FE2CEFFD /* main.swift in Sources */ = {isa = PBXBuildFile; fileRef = A980D205CF137C95E7739254 /* main.swift */; };
 /* End PBXBuildFile section */
 
@@ -37,10 +38,14 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		09F892440C36B49BD883479C /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		1F6C90EA132D60BC6CED479E /* main.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = main.swift; sourceTree = "<group>"; };
+		39DB0E4E89FE2220F46EF72A /* ClaveDaemonHost.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = ClaveDaemonHost.entitlements; sourceTree = "<group>"; };
 		5FBF611836DAB4D24BAEC379 /* ClaveESExtension.systemextension */ = {isa = PBXFileReference; explicitFileType = "wrapper.system-extension"; includeInIndex = 0; path = ClaveESExtension.systemextension; sourceTree = BUILT_PRODUCTS_DIR; };
+		70CF9896FB329F7425A6AEA9 /* ClaveDaemonHost.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = ClaveDaemonHost.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		7C3ADC7E4170E9AD023EE2EC /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		8D375262D2EF9E5AF5E83817 /* ClaveESExtension.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = ClaveESExtension.entitlements; sourceTree = "<group>"; };
+		987314572BDB8964A7024F47 /* main.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = main.swift; sourceTree = "<group>"; };
 		A980D205CF137C95E7739254 /* main.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = main.swift; sourceTree = "<group>"; };
 		B88F29783B2FCAAA43A7E101 /* ClaveES.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = ClaveES.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		C8B19C6109031E901D86959E /* ClaveES.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = ClaveES.entitlements; sourceTree = "<group>"; };
@@ -51,6 +56,7 @@
 		4DA5EF55F65EED0D754914C8 = {
 			isa = PBXGroup;
 			children = (
+				8656C2ED70145DB55386A1FF /* ClaveDaemonHost */,
 				6377987D9BD303BB25F1226B /* ClaveES */,
 				E0F18321BDB54D3E4D84A460 /* ClaveESExtension */,
 				719985330E39129E790ECDB2 /* Products */,
@@ -70,10 +76,21 @@
 		719985330E39129E790ECDB2 /* Products */ = {
 			isa = PBXGroup;
 			children = (
+				70CF9896FB329F7425A6AEA9 /* ClaveDaemonHost.app */,
 				B88F29783B2FCAAA43A7E101 /* ClaveES.app */,
 				5FBF611836DAB4D24BAEC379 /* ClaveESExtension.systemextension */,
 			);
 			name = Products;
+			sourceTree = "<group>";
+		};
+		8656C2ED70145DB55386A1FF /* ClaveDaemonHost */ = {
+			isa = PBXGroup;
+			children = (
+				39DB0E4E89FE2220F46EF72A /* ClaveDaemonHost.entitlements */,
+				09F892440C36B49BD883479C /* Info.plist */,
+				987314572BDB8964A7024F47 /* main.swift */,
+			);
+			path = ClaveDaemonHost;
 			sourceTree = "<group>";
 		};
 		E0F18321BDB54D3E4D84A460 /* ClaveESExtension */ = {
@@ -126,6 +143,24 @@
 			productReference = 5FBF611836DAB4D24BAEC379 /* ClaveESExtension.systemextension */;
 			productType = "com.apple.product-type.system-extension";
 		};
+		D3D26BA20141D0F2B5B90966 /* ClaveDaemonHost */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = AC87B7E384F8BCCDB29EE944 /* Build configuration list for PBXNativeTarget "ClaveDaemonHost" */;
+			buildPhases = (
+				A4E93377D0B02EB44BC9DF71 /* Build Rust daemon (libclave_daemon_host.a) */,
+				8300D56DC05B8C04CC39BDAF /* Sources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = ClaveDaemonHost;
+			packageProductDependencies = (
+			);
+			productName = ClaveDaemonHost;
+			productReference = 70CF9896FB329F7425A6AEA9 /* ClaveDaemonHost.app */;
+			productType = "com.apple.product-type.application";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -136,12 +171,16 @@
 				LastUpgradeCheck = 1430;
 				TargetAttributes = {
 					938D088DDE08A79BD727328F = {
-						DevelopmentTeam = "";
-						ProvisioningStyle = Manual;
+						DevelopmentTeam = B6MKLUGY37;
+						ProvisioningStyle = Automatic;
 					};
 					B1625802507F2A5A0C6980AA = {
 						DevelopmentTeam = "";
 						ProvisioningStyle = Manual;
+					};
+					D3D26BA20141D0F2B5B90966 = {
+						DevelopmentTeam = B6MKLUGY37;
+						ProvisioningStyle = Automatic;
 					};
 				};
 			};
@@ -159,6 +198,7 @@
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
+				D3D26BA20141D0F2B5B90966 /* ClaveDaemonHost */,
 				938D088DDE08A79BD727328F /* ClaveES */,
 				B1625802507F2A5A0C6980AA /* ClaveESExtension */,
 			);
@@ -185,6 +225,25 @@
 			shellPath = /bin/sh;
 			shellScript = "set -euo pipefail\ncd \"$PROJECT_DIR/../../..\"\n# Cargo lives outside Xcode's PATH under some launch contexts.\nexport PATH=\"$HOME/.cargo/bin:/opt/homebrew/bin:/usr/local/bin:$PATH\"\ncargo build -p clave-mac --release\n";
 		};
+		A4E93377D0B02EB44BC9DF71 /* Build Rust daemon (libclave_daemon_host.a) */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+			);
+			name = "Build Rust daemon (libclave_daemon_host.a)";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "set -euo pipefail\ncd \"$PROJECT_DIR/../../..\"\nexport PATH=\"$HOME/.cargo/bin:/opt/homebrew/bin:/usr/local/bin:$PATH\"\ncargo build -p clave-daemon-host --release\n";
+		};
 /* End PBXShellScriptBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
@@ -193,6 +252,14 @@
 			buildActionMask = 2147483647;
 			files = (
 				402005A5605B82A9B8FA8847 /* main.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		8300D56DC05B8C04CC39BDAF /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				318CBF881595601BE5D96D62 /* main.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -249,11 +316,8 @@
 				CLANG_WARN_UNREACHABLE_CODE = YES;
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				CLAVE_RUST_LIB_DIR = "$(PROJECT_DIR)/../../../target/release";
-				CODE_SIGN_IDENTITY = "Clave Dev Code Signing";
-				CODE_SIGN_STYLE = Manual;
 				COPY_PHASE_STRIP = NO;
 				DEBUG_INFORMATION_FORMAT = dwarf;
-				DEVELOPMENT_TEAM = "";
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				ENABLE_TESTABILITY = YES;
@@ -283,11 +347,34 @@
 			};
 			name = Debug;
 		};
+		3515DA7989D63BB7E680CD7D /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = ClaveDaemonHost/ClaveDaemonHost.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				DEVELOPMENT_TEAM = B6MKLUGY37;
+				INFOPLIST_FILE = ClaveDaemonHost/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				LIBRARY_SEARCH_PATHS = "$(inherited) $(CLAVE_RUST_LIB_DIR)";
+				OTHER_LDFLAGS = "$(inherited) -lclave_daemon_host -lobjc -liconv -framework AppKit -framework QuartzCore -framework Foundation -framework CoreGraphics -framework CoreFoundation -framework Security";
+				PRODUCT_BUNDLE_IDENTIFIER = com.clave.daemon;
+				SDKROOT = macosx;
+			};
+			name = Release;
+		};
 		3CCF78234CB8BDCD86D10180 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				CODE_SIGN_ENTITLEMENTS = ClaveESExtension/ClaveESExtension.entitlements;
+				CODE_SIGN_IDENTITY = "Clave Dev Code Signing";
+				CODE_SIGN_STYLE = Manual;
 				COMBINE_HIDPI_IMAGES = YES;
+				DEVELOPMENT_TEAM = "";
 				INFOPLIST_FILE = ClaveESExtension/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -300,12 +387,34 @@
 			};
 			name = Debug;
 		};
+		5D04A1D30ED8A4AD17F6D1D2 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = ClaveDaemonHost/ClaveDaemonHost.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				DEVELOPMENT_TEAM = B6MKLUGY37;
+				INFOPLIST_FILE = ClaveDaemonHost/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				LIBRARY_SEARCH_PATHS = "$(inherited) $(CLAVE_RUST_LIB_DIR)";
+				OTHER_LDFLAGS = "$(inherited) -lclave_daemon_host -lobjc -liconv -framework AppKit -framework QuartzCore -framework Foundation -framework CoreGraphics -framework CoreFoundation -framework Security";
+				PRODUCT_BUNDLE_IDENTIFIER = com.clave.daemon;
+				SDKROOT = macosx;
+			};
+			name = Debug;
+		};
 		6A3D07298F8255AAFBAF05C6 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = ClaveES/ClaveES.entitlements;
+				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
+				DEVELOPMENT_TEAM = B6MKLUGY37;
 				INFOPLIST_FILE = ClaveES/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/../Frameworks";
 				PRODUCT_BUNDLE_IDENTIFIER = com.clave.ClaveES;
@@ -347,11 +456,8 @@
 				CLANG_WARN_UNREACHABLE_CODE = YES;
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				CLAVE_RUST_LIB_DIR = "$(PROJECT_DIR)/../../../target/release";
-				CODE_SIGN_IDENTITY = "Clave Dev Code Signing";
-				CODE_SIGN_STYLE = Manual;
 				COPY_PHASE_STRIP = NO;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
-				DEVELOPMENT_TEAM = "";
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_NS_ASSERTIONS = NO;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
@@ -378,7 +484,10 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				CODE_SIGN_ENTITLEMENTS = ClaveESExtension/ClaveESExtension.entitlements;
+				CODE_SIGN_IDENTITY = "Clave Dev Code Signing";
+				CODE_SIGN_STYLE = Manual;
 				COMBINE_HIDPI_IMAGES = YES;
+				DEVELOPMENT_TEAM = "";
 				INFOPLIST_FILE = ClaveESExtension/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -396,7 +505,9 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = ClaveES/ClaveES.entitlements;
+				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
+				DEVELOPMENT_TEAM = B6MKLUGY37;
 				INFOPLIST_FILE = ClaveES/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/../Frameworks";
 				PRODUCT_BUNDLE_IDENTIFIER = com.clave.ClaveES;
@@ -430,6 +541,15 @@
 			buildConfigurations = (
 				F8C43094EB10018FF41781A9 /* Debug */,
 				6A3D07298F8255AAFBAF05C6 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		AC87B7E384F8BCCDB29EE944 /* Build configuration list for PBXNativeTarget "ClaveDaemonHost" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				5D04A1D30ED8A4AD17F6D1D2 /* Debug */,
+				3515DA7989D63BB7E680CD7D /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Debug;
