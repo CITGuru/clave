@@ -10,6 +10,8 @@ Terms and acronyms used across the documentation set.
 | **AES-KW** | AES Key Wrap (RFC 3394); wraps the volume DEK under a hardware-rooted KEK. |
 | **ALE** | Application Layer Enforcement — WFP layers (`ALE_CONNECT_REDIRECT`, `ALE_AUTH_CONNECT`) where per-process network decisions are made. |
 | **APC** | Asynchronous Procedure Call (Windows); used to run `LoadLibraryW` on a work app's first thread for clean shim injection. |
+| **Activity telemetry** | The work-app usage stream (active/idle/focus time, sessions, launches); a signed, hash-chained sibling of the audit log, work-zone-only (doc 18). |
+| **Away time** | Derived usage metric: wall-clock where no work app is foreground; a bare duration, never attributed to a personal app (doc 18). |
 | **Clave Edge** | Clave's persistent colored frame drawn around every work window; a UI affordance, not a security boundary. See doc 09. |
 | **BYO-PC / BYOD** | Bring-Your-Own-PC / Device — the unmanaged personal computer the enclave runs on. |
 | **COW** | Copy-on-Write — reads fall through to the base (registry/FS); first write clones into the private zone layer. Core of app-subsystem virtualization. |
@@ -22,6 +24,7 @@ Terms and acronyms used across the documentation set.
 | **Endpoint Security (ES)** | macOS framework (`EndpointSecurity`) for exec/file authorization by audit token; the macOS source of truth. Entitlement-gated. |
 | **Fail-closed** | On failure (daemon killed, policy expired, hook stripped) the system denies/locks rather than allowing — a security requirement here. |
 | **HLK / WHQL** | Windows Hardware Lab Kit / Windows Hardware Quality Labs — Microsoft's driver certification/testing path. |
+| **Idle threshold** | Input-gap (seconds) past which a foreground work app's time is counted as idle rather than active; a `TrackingPolicy` knob (doc 18). |
 | **IRP** | I/O Request Packet — the Windows kernel I/O unit a minifilter intercepts (e.g. `IRP_MJ_CREATE`). |
 | **Job Object / Server Silo** | Windows kernel primitives for grouping/containing process trees; Silos additionally virtualize the object/registry namespace. |
 | **Kernel-authoritative** | A guarantee that terminates in a kernel-driver (Win) or system-extension (mac) check keyed on a kernel-supplied identity — not a user-mode hook. The core security principle (doc 01 §4). |
