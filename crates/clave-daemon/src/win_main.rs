@@ -30,6 +30,8 @@ pub fn run_windows() {
     // A real clipboard guard runs (EmptyClipboard genuinely clears the payload), but it is
     // poll-based rather than the delayed-render broker, so its honest posture is development-only.
     platform.set_enforcement(Capability::Clipboard, EnforcementStatus::DevelopmentOnly);
+    // The Clave Edge overlay draws work-window borders — a UI affordance, never a control.
+    platform.set_enforcement(Capability::Overlay, EnforcementStatus::DevelopmentOnly);
 
     // Job Object containment for launched work apps: `launch` assigns each app to the job, and a
     // supervisor thread reconciles the work zone with the job's live process tree.
@@ -92,6 +94,7 @@ pub fn run_windows() {
         spawn_zone_supervisor(Arc::clone(&zones), containment);
     }
     spawn_split_tunnel(Arc::clone(&daemon), Arc::clone(&zones));
+    spawn_clave_edge(Arc::clone(&daemon), Arc::clone(&zones));
 
     if let Err(e) = rt.block_on(serve_launcher_loop(daemon)) {
         // `first_pipe_instance(true)` (which stops a rogue process from pre-creating the pipe and
@@ -153,6 +156,16 @@ fn spawn_split_tunnel(daemon: Arc<Daemon>, zones: Arc<ZoneRegistry>) {
                 "clave-win: WinDivert split-tunnel inactive ({e}); network stays loopback \
                  development-only."
             );
+        }
+    });
+}
+
+/// Draws the Clave Edge overlay: colored borders around on-screen work windows, refreshed from
+/// the live policy's border config. A visibility affordance, not a control.
+fn spawn_clave_edge(daemon: Arc<Daemon>, zones: Arc<ZoneRegistry>) {
+    std::thread::spawn(move || {
+        if let Err(e) = clave_win::run_clave_edge(zones, move || daemon.overlay_cfg()) {
+            eprintln!("clave-win: Clave Edge overlay unavailable ({e})");
         }
     });
 }
