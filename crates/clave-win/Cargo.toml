@@ -11,6 +11,14 @@ description = "Windows platform adapter for Clave: Job Object containment, clipb
 clave-platform = { path = "../clave-platform" }
 clave-core = { path = "../clave-core" }
 clave-net = { path = "../clave-net" }
+clave-volume = { path = "../clave-volume" }
+
+[target.'cfg(windows)'.dependencies.winfsp]
+version = "0.13"
+
+[target.'cfg(windows)'.build-dependencies.winfsp]
+version = "0.13"
+features = ["delayload"]
 
 # Real Windows dependencies live here so non-Windows CI never fetches or compiles them.
 [target.'cfg(windows)'.dependencies]
