@@ -103,7 +103,7 @@ receives a real signed policy, and reports audit back.
   (Persona-unlock/ES-gating/tier-2 delegated grants are OS- or NG-4-gated; out of this item.)
   *Files:* `clave-core/src/web.rs` (new), `PolicyBundle` field, `clave-launcher`.
 
-- [ ] **NG-13 — Launcher catalog persistence.** **S/M**
+- [x] **NG-13 — Launcher catalog persistence.** **S/M**
   Favorites/hidden/recents are ephemeral React state lost on reload; no add-app flow. Persist
   launcher-local state and, if edits should be authoritative, route them to a real store.
   *Files:* `clave-launcher/src/components/full-view.tsx`, `clave-launcher/src-tauri`.

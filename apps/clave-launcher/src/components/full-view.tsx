@@ -47,6 +47,22 @@ type Section =
   | "compliance"
   | "settings";
 
+const STORE_KEY = "clave-launcher-state-v1";
+type Persisted = { hidden: string[]; recents: AppInfo[] };
+
+function loadPersisted(): Persisted {
+  try {
+    const raw = localStorage.getItem(STORE_KEY);
+    if (raw) {
+      const p = JSON.parse(raw) as Partial<Persisted>;
+      return { hidden: p.hidden ?? [], recents: p.recents ?? [] };
+    }
+  } catch {
+    // corrupt or unavailable storage — fall back to empty prefs
+  }
+  return { hidden: [], recents: [] };
+}
+
 function AppTile({
   app,
   editing,
@@ -261,8 +277,8 @@ export function FullView({
   const [toast, setToast] = useState<string | null>(null);
   const [collapsed, setCollapsed] = useState(initialCollapsed);
   const [editing, setEditing] = useState(initialEditing);
-  const [hidden, setHidden] = useState<Set<string>>(new Set());
-  const [recents, setRecents] = useState<AppInfo[]>([]);
+  const [hidden, setHidden] = useState<Set<string>>(() => new Set(loadPersisted().hidden));
+  const [recents, setRecents] = useState<AppInfo[]>(() => loadPersisted().recents);
   const [launching, setLaunching] = useState<Set<string>>(new Set());
 
   useEffect(() => {
@@ -271,6 +287,15 @@ export function FullView({
     invoke<StatusInfo>("status").then(setStatus).catch(console.error);
     invoke<WebApp[]>("list_web_apps").then(setWebApps).catch(console.error);
   }, []);
+
+  useEffect(() => {
+    try {
+      const state: Persisted = { hidden: [...hidden], recents };
+      localStorage.setItem(STORE_KEY, JSON.stringify(state));
+    } catch {
+      // storage unavailable — prefs simply won't persist this session
+    }
+  }, [hidden, recents]);
 
   const filtered = useMemo(
     () =>
