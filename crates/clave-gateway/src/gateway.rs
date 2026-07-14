@@ -5,6 +5,7 @@ use clave_identity::{
     EnrollmentDecision, Invitation, LoginDecision, Membership, MembershipStatus, Role, UnixTime,
     UserId, WorkspaceId,
 };
+use clave_core::PolicyBundle;
 use clave_proto::SignedCommand;
 use serde::{Deserialize, Serialize};
 
@@ -374,5 +375,54 @@ impl<I: IdentityProvider, S: Store> Gateway<I, S> {
         self.store
             .set_device_status(ctx.workspace, device, DeviceStatus::Wiped)
             .await
+    }
+
+    fn policy_issuer(&self) -> Result<&Arc<dyn PolicyIssuer>, GatewayError> {
+        self.policy_issuer
+            .as_ref()
+            .ok_or_else(|| GatewayError::NotFound("policy issuer not configured".into()))
+    }
+
+    pub async fn get_policy(
+        &self,
+        ctx: &RequestContext,
+    ) -> Result<Option<PolicyBundle>, GatewayError> {
+        Self::require(ctx, AdminAction::ManagePolicy)?;
+        match &self.policy_issuer {
+            Some(issuer) => issuer.current_policy(ctx.workspace).await,
+            None => Ok(None),
+        }
+    }
+
+    pub async fn author_policy(
+        &self,
+        ctx: &RequestContext,
+        bundle: PolicyBundle,
+    ) -> Result<PolicyBundle, GatewayError> {
+        Self::require(ctx, AdminAction::ManagePolicy)?;
+        self.policy_issuer()?.author_policy(ctx.workspace, bundle).await
+    }
+
+    pub async fn reissue_policy(
+        &self,
+        ctx: &RequestContext,
+        now: UnixTime,
+    ) -> Result<SignedCommand, GatewayError> {
+        Self::require(ctx, AdminAction::ManagePolicy)?;
+        self.policy_issuer()?
+            .reissue_policy(ctx.workspace, now)
+            .await?
+            .ok_or_else(|| GatewayError::NotFound("no policy to reissue".into()))
+    }
+
+    pub async fn policy_versions(
+        &self,
+        ctx: &RequestContext,
+    ) -> Result<Vec<u64>, GatewayError> {
+        Self::require(ctx, AdminAction::ManagePolicy)?;
+        match &self.policy_issuer {
+            Some(issuer) => issuer.policy_versions(ctx.workspace).await,
+            None => Ok(Vec::new()),
+        }
     }
 }

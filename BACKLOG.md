@@ -57,7 +57,7 @@ receives a real signed policy, and reports audit back.
   Does not exist. Login, members (invite/role/suspend), devices (list/lock/wipe), audit view.
   React/Vite/Shadcn/Tailwind per spec. *Files:* new `apps/clave-console`. Doc 15 §2, §9 step 4.
 
-- [ ] **NG-6 — Policy authoring + versioning + reissue.** **M/L**
+- [x] **NG-6 — Policy authoring + versioning + reissue.** **M/L**
   Today `MemPolicyIssuer::issue_initial_policy` only signs a static `PolicyBundle::restrictive_default()`
   (hard-coded at `server_main.rs:52`). Add an admin path to author/edit policy, version history,
   monotonic-version reissue to already-enrolled devices, and real rollback-protection high-water.

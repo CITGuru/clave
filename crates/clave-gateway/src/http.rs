@@ -16,7 +16,9 @@ use cookie::{Cookie, SameSite};
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
 
-use crate::{DeviceId, Gateway, GatewayError, IdentityProvider, RequestContext, Session, Store};
+use crate::{
+    DeviceId, Gateway, GatewayError, IdentityProvider, PolicyBundle, RequestContext, Session, Store,
+};
 
 pub const SESSION_COOKIE: &str = "clave_session";
 
@@ -95,6 +97,9 @@ pub fn build_router(state: AppState) -> Router {
         .route("/admin/devices", get(admin_list_devices))
         .route("/admin/devices/lock", post(admin_lock_device))
         .route("/admin/devices/wipe", post(admin_wipe_device))
+        .route("/admin/policy", get(admin_get_policy).post(admin_author_policy))
+        .route("/admin/policy/versions", get(admin_policy_versions))
+        .route("/admin/policy/reissue", post(admin_reissue_policy))
         .with_state(state)
 }
 
@@ -260,6 +265,54 @@ async fn admin_wipe_device(
     };
     match st.gateway.wipe_device(&ctx, DeviceId(id)).await {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(e) => err_response(e),
+    }
+}
+
+async fn admin_get_policy(State(st): State<AppState>, headers: HeaderMap) -> Response {
+    let ctx = match admin_ctx(&st, &headers).await {
+        Ok(c) => c,
+        Err(r) => return r,
+    };
+    match st.gateway.get_policy(&ctx).await {
+        Ok(policy) => Json(policy).into_response(),
+        Err(e) => err_response(e),
+    }
+}
+
+async fn admin_author_policy(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Json(bundle): Json<PolicyBundle>,
+) -> Response {
+    let ctx = match admin_ctx(&st, &headers).await {
+        Ok(c) => c,
+        Err(r) => return r,
+    };
+    match st.gateway.author_policy(&ctx, bundle).await {
+        Ok(new) => Json(new).into_response(),
+        Err(e) => err_response(e),
+    }
+}
+
+async fn admin_policy_versions(State(st): State<AppState>, headers: HeaderMap) -> Response {
+    let ctx = match admin_ctx(&st, &headers).await {
+        Ok(c) => c,
+        Err(r) => return r,
+    };
+    match st.gateway.policy_versions(&ctx).await {
+        Ok(versions) => Json(versions).into_response(),
+        Err(e) => err_response(e),
+    }
+}
+
+async fn admin_reissue_policy(State(st): State<AppState>, headers: HeaderMap) -> Response {
+    let ctx = match admin_ctx(&st, &headers).await {
+        Ok(c) => c,
+        Err(r) => return r,
+    };
+    match st.gateway.reissue_policy(&ctx, now()).await {
+        Ok(signed) => Json(signed).into_response(),
         Err(e) => err_response(e),
     }
 }
