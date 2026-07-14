@@ -21,6 +21,12 @@ use serde::{Deserialize, Serialize};
 mod enroll;
 pub use enroll::{AcceptedEnrollment, DeviceEnrollment, DeviceVolumeKey, EnrollError};
 
+mod enrollment_store;
+pub use enrollment_store::{
+    boot_enrollment, bootstrap_dev_enrollment, BootedEnrollment, EnrollmentRecord, EnrollmentStore,
+    FileEnrollmentStore,
+};
+
 #[cfg(target_os = "macos")]
 pub mod mac_main;
 
@@ -871,4 +877,27 @@ impl GatewaySync {
         }
         report
     }
+}
+
+pub fn spawn_gateway_sync(
+    daemon: Arc<Daemon>,
+    link: Box<dyn GatewayLink>,
+    device_key: DeviceSigningKey,
+    checkpoint_store: FileCheckpointStore,
+    interval: std::time::Duration,
+    clock: impl Fn() -> UnixTime + Send + 'static,
+) {
+    std::thread::spawn(move || {
+        let mut sync = GatewaySync::new(link, device_key, Box::new(checkpoint_store));
+        loop {
+            std::thread::sleep(interval);
+            let report = sync.sync_once(&daemon, clock());
+            if report.applied > 0 || report.rejected > 0 || report.audit_shipped > 0 {
+                eprintln!(
+                    "clave-daemon: gateway sync — applied {}, rejected {}, shipped {} audit event(s)",
+                    report.applied, report.rejected, report.audit_shipped
+                );
+            }
+        }
+    });
 }

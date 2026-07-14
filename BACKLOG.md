@@ -25,7 +25,7 @@ receives a real signed policy, and reports audit back.
 
 ## A. Close the real end-to-end loop — *pieces exist, just unwired*
 
-- [ ] **NG-1 — Wire enrollment + `GatewaySync` into the running daemon.** **L**
+- [x] **NG-1 — Wire enrollment + `GatewaySync` into the running daemon.** **L**
   Persist enrollment artifacts (signed policy bundle, wrapped/sealed volume key, pinned tenant
   key), load them on boot, replace `demo_policy()` + fixed keys, and spawn the periodic
   pull→apply→drain→ship task. `DeviceEnrollment::accept` and `GatewaySync::sync_once` are done and
