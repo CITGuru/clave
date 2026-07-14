@@ -17,6 +17,63 @@ Rust crate that reaches it. Cross-reference the numbered docs for usage.
 | Authoritative create time (anti-PID-reuse) | `PsGetProcessCreateTimeQuadPart` | kernel | WDK |
 | Push set to user mode | inverted-call `DeviceIoControl` (pended IRPs) | both | `windows` |
 
+### Enforced containment model (what `Enforced` requires)
+
+The rows above split into two tiers. **Job Objects are the lab-build stand-in, not the enforced
+path**: `AssignProcessToJobObject` runs *after* `CreateProcess`, so it (1) races the process's own
+startup and (2) cannot hold a process it did not itself spawn. A launcher that shells out to a
+**singleton or broker** — e.g. `explorer.exe`, which forwards the request to the already-running
+desktop shell over DCOM and exits; COM/`svchost`-activated or protected processes likewise — leaves
+the spawned PID dead and the real window hosted by a process outside the job.
+
+The enforced model does not try to *own* such processes. It decides membership in the kernel at
+birth and gates the **resource** by that tag:
+
+- **Tag at birth** — `PsSetCreateProcessNotifyRoutineEx2` fires synchronously just after the first
+  thread is created, in the creator's context, carrying `ParentProcessId` +
+  `CreatingThreadId->UniqueProcess` + image name, and can set `CreationStatus` to **block** the
+  spawn. Every process is classified work/personal before it runs — no assign-after-spawn window —
+  and PID reuse is closed with `PsGetProcessCreateTimeQuadPart`.
+- **Gate the Clave Disk, not the process** — the encryption minifilter attaches a per-`FileObject`
+  context at `IRP_MJ_CREATE` recording the opening process, and decrypts only for tagged work
+  processes. An untagged singleton shell reads ciphertext / is denied, so it never needs containing.
+- **Gate the network per tag** — the WFP callout (`ALE_CONNECT_REDIRECT` / `ALE_AUTH_CONNECT`)
+  classifies and routes each flow by the same kernel PID tag.
+
+All three entry points (`PsSetCreateProcessNotifyRoutineEx2`, `ObRegisterCallbacks`,
+`FltRegisterFilter`) return `STATUS_ACCESS_DENIED` for an unsigned driver on a Secure Boot machine
+(Win10 1607+). That signing requirement (A.10) is the exact line between today's `DevelopmentOnly`
+user-mode controls and `Enforced`. Until it is met, user-mode supervision cannot contain
+shell/singleton apps, so the demo allow-list should carry only normally spawnable apps.
+
+### Driver bring-up (the process)
+
+Reaching `Enforced` is a workstream distinct from the user-mode crates. The `PsSetCreateProcessNotifyRoutineEx2`
+tag-at-birth callback lives in a new `clave.sys`; standing it up, in order:
+
+1. **Stand up a driver target.** `clave.sys` via `windows-drivers-rs` (WDM/KMDF; mirrors the C in
+   [doc 02 §2.1](02-process-supervision.md)) or C/WDK. `DriverEntry` registers the callback and
+   removes it on unload; add an IOCTL control device for the user-mode bridge.
+2. **Satisfy the load-time gates.** Link `/INTEGRITYCHECK` (sets
+   `IMAGE_DLLCHARACTERISTICS_FORCE_INTEGRITY`) — without it the callback registration returns
+   `STATUS_ACCESS_DENIED`. The image must also be signed: a self-signed **test cert** in dev, the
+   Microsoft counter-signature in prod (step 5).
+3. **Iterate on a throwaway VM.** Windows 11 VM + WDK/Visual Studio (or the `windows-drivers-rs`
+   toolchain) + test cert + kernel debugger; `bcdedit /set testsigning on`, load via
+   `sc create clave type= kernel` + `sc start`. Not the primary box — the callback sits in *every*
+   process-creation path, so a bug BSODs it, wedges process creation, or breaks boot, and
+   test-signing means dropping Secure Boot / HVCI; WinDbg needs a separate target regardless.
+4. **Bridge to the daemon (inverted call).** `clave-win` opens the control device, seeds
+   `g_daemon_pid`, and drains `PROC_ADDED`/`PROC_REMOVED` over pended IOCTLs into `ZoneRegistry`
+   ([doc 02 §2.3](02-process-supervision.md)) — replacing the 500 ms Job-Object poll for
+   *membership*; the Job Object stays for kill-on-close *containment*. The same driver (or a
+   companion minifilter) later gates the Clave Disk per tag.
+5. **Production signing (the long pole).** EV cert → Partner Center → attestation (or WHQL)
+   counter-signature; a minifilter also needs a Microsoft-allocated altitude. Weeks of lead,
+   re-submitted each revision ([doc 12 §1.2](12-signing-distribution-deployment.md)); only then
+   does it load on a stock Secure-Boot machine. (Contrast WinDivert in A.7: a *pre-signed*
+   third-party driver that loads on a normal machine and only needs elevation.)
+
 ## A.2 App-subsystem virtualization (doc 03)
 
 | Need | Primitive | Layer | Rust |
