@@ -70,7 +70,7 @@ receives a real signed policy, and reports audit back.
   query/report API for the console, and a suppression-alert surface. `Gateway::ingest_device_audit`
   exists but nothing calls it over the wire. *Files:* `clave-gateway/src/{audit_ingest,http,postgres}.rs`. Doc 10 §6.
 
-- [ ] **NG-8 — SCIM directory sync → membership suspend/restore.** **M**
+- [x] **NG-8 — SCIM directory sync → membership suspend/restore.** **M**
   The `on_directory_event(ScimEvent) -> MembershipDelta` method (doc 15 §6) was dropped from the real
   `IdentityProvider` trait; `grep scim` is empty. Add `ScimEvent`/`MembershipDelta`, a webhook route,
   and the suspend/restore path. *Files:* `clave-gateway/src/{idp,http,workos}.rs`. Doc 15 §1, §6, §9 step 3.

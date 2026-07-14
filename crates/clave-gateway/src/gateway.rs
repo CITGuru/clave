@@ -12,8 +12,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     AuditAlert, AuditLedger, AuditRecord, DenyReason, DeviceId, DeviceRecord, DeviceStatus,
-    GatewayError, IdentityProvider, IngestError, MemberRecord, PolicyIssuer, RequestContext,
-    Session, SignedSpoolBatch, Store, VolumeKeyService, WrappedVolumeKey,
+    GatewayError, IdentityProvider, IngestError, MemberRecord, MembershipDelta, PolicyIssuer,
+    RequestContext, ScimEvent, Session, SignedSpoolBatch, Store, VolumeKeyService, WrappedVolumeKey,
 };
 
 pub struct Gateway<I, S> {
@@ -460,5 +460,44 @@ impl<I: IdentityProvider, S: Store> Gateway<I, S> {
             .into_iter()
             .filter(|a| ids.contains(&a.device))
             .collect())
+    }
+
+    pub async fn apply_directory_event(
+        &self,
+        event: ScimEvent,
+    ) -> Result<MembershipDelta, GatewayError> {
+        let workspace = event.workspace();
+        let email = event.email();
+        let members = self.store.list_members(workspace).await?;
+        let Some(user) = members
+            .iter()
+            .find(|m| m.email.eq_ignore_ascii_case(email.as_str()))
+            .map(|m| m.user)
+        else {
+            return Ok(MembershipDelta::Unchanged);
+        };
+
+        let mut membership = self
+            .store
+            .membership(workspace, user)
+            .await?
+            .ok_or_else(|| GatewayError::NotFound(format!("member {}", user.0)))?;
+
+        let target = if event.activates() {
+            MembershipStatus::Active
+        } else {
+            MembershipStatus::Suspended
+        };
+        if membership.status == target {
+            return Ok(MembershipDelta::Unchanged);
+        }
+        membership.status = target;
+        self.store.put_membership(&membership).await?;
+
+        Ok(if event.activates() {
+            MembershipDelta::Restored { user }
+        } else {
+            MembershipDelta::Suspended { user }
+        })
     }
 }

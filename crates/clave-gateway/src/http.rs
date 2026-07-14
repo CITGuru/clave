@@ -18,7 +18,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     DeviceId, Gateway, GatewayError, IdentityProvider, IngestError, PolicyBundle, RequestContext,
-    Session, SignedSpoolBatch, Store,
+    ScimEvent, Session, SignedSpoolBatch, Store,
 };
 
 pub const SESSION_COOKIE: &str = "clave_session";
@@ -70,6 +70,7 @@ impl SessionSealer {
 pub struct AppState {
     pub gateway: Arc<DynGateway>,
     pub sealer: Arc<SessionSealer>,
+    pub scim_token: Option<Arc<String>>,
 }
 
 impl AppState {
@@ -77,7 +78,13 @@ impl AppState {
         Self {
             gateway,
             sealer: Arc::new(sealer),
+            scim_token: None,
         }
+    }
+
+    pub fn with_scim_token(mut self, token: impl Into<String>) -> Self {
+        self.scim_token = Some(Arc::new(token.into()));
+        self
     }
 }
 
@@ -104,7 +111,33 @@ pub fn build_router(state: AppState) -> Router {
         .route("/admin/audit", get(admin_audit_events))
         .route("/admin/audit/alerts", get(admin_audit_alerts))
         .route("/audit/ingest", post(audit_ingest))
+        .route("/scim/events", post(scim_events))
         .with_state(state)
+}
+
+fn scim_authorized(st: &AppState, headers: &HeaderMap) -> bool {
+    let Some(expected) = &st.scim_token else {
+        return false;
+    };
+    headers
+        .get(header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "))
+        .is_some_and(|token| token == expected.as_str())
+}
+
+async fn scim_events(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Json(event): Json<ScimEvent>,
+) -> Response {
+    if !scim_authorized(&st, &headers) {
+        return (StatusCode::UNAUTHORIZED, "invalid or missing SCIM token").into_response();
+    }
+    match st.gateway.apply_directory_event(event).await {
+        Ok(delta) => Json(delta).into_response(),
+        Err(e) => err_response(e),
+    }
 }
 
 #[derive(Deserialize)]
