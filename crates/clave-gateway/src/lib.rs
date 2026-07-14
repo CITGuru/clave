@@ -15,6 +15,11 @@ mod volume;
 mod postgres;
 #[cfg(feature = "workos")]
 mod workos;
+#[cfg(feature = "device-link")]
+mod device_link;
+
+#[cfg(feature = "device-link")]
+pub use device_link::serve_device_audit;
 
 pub use audit_ingest::{
     AuditAlert, AuditLedger, AuditRecord, AuditStore, IngestError, MemAuditStore, PersistedChain,

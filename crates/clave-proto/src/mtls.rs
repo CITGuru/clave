@@ -109,6 +109,21 @@ pub async fn connect_gateway_link(
     Ok(link)
 }
 
+pub async fn accept_device_link<IO>(
+    config: Arc<ServerConfig>,
+    io: IO,
+) -> io::Result<crate::transport::DeviceLink>
+where
+    IO: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+{
+    let tls = accept(config, io).await?;
+    let (link, ends) = crate::transport::device_link();
+    tokio::spawn(async move {
+        let _ = crate::transport::serve_device_pump(tls, ends).await;
+    });
+    Ok(link)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -204,6 +219,48 @@ mod tests {
         link.push_audit(batch.clone()).unwrap();
 
         assert_eq!(server.await.unwrap(), Some(batch));
+    }
+
+    #[tokio::test]
+    async fn device_and_gateway_exchange_audit_and_commands_over_mtls() {
+        let (gw_cert, gw_key) = self_signed("gateway.test");
+        let (dev_cert, dev_key) = self_signed("device.test");
+        let server_cfg =
+            server_config(&dev_cert, Identity::from_pem(&gw_cert, &gw_key).unwrap()).unwrap();
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap().to_string();
+
+        let server = tokio::spawn(async move {
+            let (tcp, _) = listener.accept().await.unwrap();
+            accept_device_link(server_cfg, tcp).await.unwrap()
+        });
+
+        let mut device = connect_gateway_link(
+            &addr,
+            "gateway.test",
+            &gw_cert,
+            Identity::from_pem(&dev_cert, &dev_key).unwrap(),
+        )
+        .await
+        .unwrap();
+        let mut gateway = server.await.unwrap();
+
+        let batch = DeviceSigningKey::from_seed([7u8; 32]).sign_batch(Vec::new(), GENESIS);
+        device.push_audit(batch.clone()).unwrap();
+        assert_eq!(gateway.recv_audit().await, Some(batch));
+
+        let cmd = a_command();
+        gateway.send_command(cmd.clone()).unwrap();
+        let mut pulled = Vec::new();
+        for _ in 0..1000 {
+            pulled = device.poll_commands();
+            if !pulled.is_empty() {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+        assert_eq!(pulled, vec![cmd]);
     }
 
     #[tokio::test]
