@@ -12,6 +12,7 @@ usage:
   clave-cli classify-path <mount_point> <path> [work_data_root ...]
   clave-cli apps   <policy.json>
   clave-cli launch <policy.json> <app_id> <mount_point>
+  clave-cli audit  [--json]
 ";
 
 fn main() {
@@ -47,6 +48,7 @@ fn run(args: &[String]) -> Result<String, String> {
             let mount = rest.get(2).ok_or("launch needs <mount_point>")?;
             launch_text(&load_policy(path)?, app, mount, &cli_user())
         }
+        "audit" => audit_cmd(rest.iter().any(|a| a == "--json")),
         other => Err(format!("unknown command: {other}")),
     }
 }
@@ -99,6 +101,38 @@ fn launch_text(
     }
     out.push_str("(spawn + inject = OS layer, deferred)\n");
     Ok(out)
+}
+
+fn audit_cmd(json: bool) -> Result<String, String> {
+    use clave_ipc::transport::{default_launcher_endpoint, LauncherClient};
+
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|e| e.to_string())?;
+    rt.block_on(async {
+        let mut client = LauncherClient::connect(default_launcher_endpoint())
+            .await
+            .map_err(|_| "cannot reach the clave daemon (is it running?)".to_string())?;
+        let events = client.peek_audit().await.map_err(|e| e.to_string())?;
+        if json {
+            return serde_json::to_string_pretty(&events)
+                .map(|s| format!("{s}\n"))
+                .map_err(|e| e.to_string());
+        }
+        if events.is_empty() {
+            return Ok("(audit spool is empty)\n".to_string());
+        }
+        let mut out = String::new();
+        for e in &events {
+            let app = e.app_id.as_ref().map(|a| a.0.as_str()).unwrap_or("-");
+            out.push_str(&format!(
+                "{}\t{:?}\t{:?}\tapp={}\n",
+                e.ts, e.action, e.verdict.decision, app
+            ));
+        }
+        Ok(out)
+    })
 }
 
 fn classify_exec_cmd(args: &[String]) -> Result<String, String> {

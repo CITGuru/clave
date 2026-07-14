@@ -84,13 +84,13 @@ impl AuditLedger {
             }
         };
 
-        let events: Vec<AuditEvent> = batch.entries.iter().map(|e| e.event).collect();
+        let events: Vec<AuditEvent> = batch.entries.iter().map(|e| e.event.clone()).collect();
         chain.next_seq += events.len() as u64;
         chain.head = new_head;
 
         let mut verified = self.verified.lock().expect("ledger lock");
         for e in &events {
-            verified.push((device, *e));
+            verified.push((device, e.clone()));
         }
         Ok(events)
     }
@@ -109,7 +109,7 @@ impl AuditLedger {
             .expect("ledger lock")
             .iter()
             .filter(|(d, _)| *d == device)
-            .map(|(_, e)| *e)
+            .map(|(_, e)| e.clone())
             .collect()
     }
 

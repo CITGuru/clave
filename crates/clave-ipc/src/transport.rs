@@ -450,4 +450,15 @@ impl LauncherClient {
             None => Err(TransportError::Truncated),
         }
     }
+
+    pub async fn peek_audit(
+        &mut self,
+    ) -> Result<Vec<clave_core::AuditEvent>, TransportError> {
+        self.conn.write(&LauncherRequest::PeekAudit).await?;
+        match self.conn.read::<LauncherReply>().await? {
+            Some(LauncherReply::Audit { events }) => Ok(events),
+            Some(_) => Err(TransportError::Handshake("expected Audit")),
+            None => Err(TransportError::Truncated),
+        }
+    }
 }

@@ -133,6 +133,32 @@ fn offline_daemon() -> Arc<Daemon> {
 }
 
 #[test]
+fn repeated_denials_are_coalesced_in_the_audit_chain() {
+    let (daemon, _h, _audit) = make();
+    let leak = Action::ClipboardTransfer {
+        src: Zone::Work,
+        dst: Zone::Personal,
+        fmt: ClipFormat::Files,
+    };
+
+    for _ in 0..50 {
+        assert_eq!(daemon.decide_action(&leak, 1_000).decision, Decision::Deny);
+    }
+    assert_eq!(
+        daemon.peek_audit().0.len(),
+        1,
+        "a tight denial loop within the window audits once"
+    );
+
+    daemon.decide_action(&leak, 1_005);
+    assert_eq!(
+        daemon.peek_audit().0.len(),
+        2,
+        "a denial after the coalesce window is audited afresh"
+    );
+}
+
+#[test]
 fn web_apps_resolve_to_a_contained_browser_window() {
     let (daemon, _h, _audit) = make();
     let mut pol = PolicyBundle::restrictive_default();

@@ -90,7 +90,10 @@ pub struct Daemon {
     volume: Arc<Mutex<ClaveVolume>>,
     gateway: Mutex<GatewayVerifier>,
     policy_observer: Mutex<Option<PolicyObserver>>,
+    last_audit: Mutex<Option<(AuditAction, UnixTime)>>,
 }
+
+const AUDIT_COALESCE_SECS: UnixTime = 2;
 
 impl Daemon {
     pub fn new(
@@ -111,6 +114,7 @@ impl Daemon {
             volume,
             gateway: Mutex::new(gateway),
             policy_observer: Mutex::new(None),
+            last_audit: Mutex::new(None),
         }
     }
 
@@ -280,10 +284,23 @@ impl Daemon {
         let verdict = decide(action, &self.zones, &pol, now);
         if !verdict.is_allow() {
             if let Some(a) = audit_action_for(action, &verdict) {
-                self.audit.emit(AuditEvent::new(now, a, verdict));
+                if self.should_audit(a, now) {
+                    self.audit.emit(AuditEvent::new(now, a, verdict));
+                }
             }
         }
         verdict
+    }
+
+    fn should_audit(&self, action: AuditAction, now: UnixTime) -> bool {
+        let mut last = self.last_audit.lock().unwrap();
+        if let Some((prev, ts)) = *last {
+            if prev == action && now.saturating_sub(ts) < AUDIT_COALESCE_SECS {
+                return false;
+            }
+        }
+        *last = Some((action, now));
+        true
     }
 
     pub fn on_work_window_created(&self, w: WindowId) {
@@ -415,6 +432,9 @@ impl Daemon {
                 Err(e) => LauncherReply::LaunchFailed {
                     error: e.to_string(),
                 },
+            },
+            LauncherRequest::PeekAudit => LauncherReply::Audit {
+                events: self.peek_audit().0.into_iter().map(|e| e.event).collect(),
             },
         }
     }

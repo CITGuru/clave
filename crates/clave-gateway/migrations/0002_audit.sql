@@ -17,6 +17,7 @@ CREATE TABLE IF NOT EXISTS audit_event (
     zone        text        NOT NULL,
     action      text        NOT NULL,
     verdict     text        NOT NULL,
+    app_id      text,                             -- work app that triggered the event, if known
     ingested_at timestamptz NOT NULL DEFAULT now(),
     UNIQUE (device_id, seq)
 );

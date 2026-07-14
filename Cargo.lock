@@ -343,6 +343,7 @@ dependencies = [
  "clave-proto",
  "clave-win",
  "serde_json",
+ "tokio",
 ]
 
 [[package]]

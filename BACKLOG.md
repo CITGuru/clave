@@ -108,7 +108,7 @@ receives a real signed policy, and reports audit back.
   launcher-local state and, if edits should be authoritative, route them to a real store.
   *Files:* `clave-launcher/src/components/full-view.tsx`, `clave-launcher/src-tauri`.
 
-- [ ] **NG-14 — Audit schema `app_id` + local export + rate-limit/coalesce.** **S/M**
+- [x] **NG-14 — Audit schema `app_id` + local export + rate-limit/coalesce.** **S/M**
   `AuditEvent` lacks the spec'd `app_id` (which work app triggered the event). No CLI/launcher command
   dumps or exports the local hash-chained spool. No rate-limit/coalesce, so a denied-clipboard loop
   floods the chain. *Files:* `clave-core/src/audit.rs`, `clave-proto/src/audit.rs`, `clave-cli`. Doc 10 §6.
