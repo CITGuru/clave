@@ -94,10 +94,27 @@ mod driver {
     use std::net::IpAddr;
     use std::sync::Arc;
     use windows::core::{s, w, PCSTR};
-    use windows::Win32::Foundation::{BOOL, HANDLE, HMODULE, INVALID_HANDLE_VALUE};
+    use windows::Win32::Foundation::{
+        GetLastError, BOOL, HANDLE, HMODULE, INVALID_HANDLE_VALUE,
+    };
     use windows::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryW};
 
     const LAYER_SOCKET: i32 = 3;
+
+    /// Turns the `GetLastError` code from a failed `WinDivertOpen` into an actionable reason instead
+    /// of always blaming elevation — a blocked driver signature or a missing `.sys` look nothing like
+    /// access-denied.
+    fn open_failure_reason(code: u32) -> String {
+        let hint = match code {
+            5 => "run the daemon elevated (Administrator)",
+            2 | 3 => "WinDivert64.sys is missing next to the daemon",
+            87 => "WinDivert reported ERROR_INVALID_PARAMETER (driver/DLL version mismatch)",
+            577 => "the WinDivert driver signature was rejected (Secure Boot is blocking the third-party driver)",
+            1275 | 1276 => "the WinDivert driver is blocked by a Windows code-integrity policy",
+            _ => "see the WinDivert error code",
+        };
+        format!("WinDivertOpen failed (error {code}) — {hint}")
+    }
 
     type FnOpen = unsafe extern "system" fn(PCSTR, i32, i16, u64) -> HANDLE;
     type FnRecv = unsafe extern "system" fn(HANDLE, *mut u8, u32, *mut u32, *mut u8) -> BOOL;
@@ -153,9 +170,10 @@ mod driver {
         // a blocked operation. A tight, default-allow loop keeps the machine's networking intact.
         let handle = unsafe { (api.open)(s!("outbound and (tcp or udp)"), LAYER_SOCKET, 0, 0) };
         if handle == INVALID_HANDLE_VALUE {
+            let code = unsafe { GetLastError() }.0;
             return Err(std::io::Error::new(
                 std::io::ErrorKind::PermissionDenied,
-                "WinDivertOpen failed — run the daemon elevated (Administrator)",
+                open_failure_reason(code),
             ));
         }
 
