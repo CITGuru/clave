@@ -22,7 +22,7 @@ pub use http::{build_router, AppState, DynGateway, SessionSealer, SESSION_COOKIE
 pub use idp::{DeviceAuth, IdentityProvider, MockIdentityProvider, VerifiedUser};
 pub use policy::{CounterStore, FileCounter, MemCounter, MemPolicyIssuer, PolicyIssuer};
 pub use session::{RequestContext, Session};
-pub use store::{DeviceId, MemStore, Store};
+pub use store::{DeviceId, DeviceRecord, DeviceStatus, MemStore, MemberRecord, Store};
 pub use volume::{MemVolumeKeyService, SealedVolumeKeyService, VolumeKeyService};
 
 pub use clave_core::PolicyBundle;

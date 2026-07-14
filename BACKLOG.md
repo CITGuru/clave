@@ -47,7 +47,7 @@ receives a real signed policy, and reports audit back.
 
 ## B. Control plane / fleet management — *greenfield, all portable server work*
 
-- [ ] **NG-4 — Gateway admin API.** **L**
+- [x] **NG-4 — Gateway admin API.** **L**
   Create invitations; list/suspend/restore members; change roles; list devices; lock/wipe a device.
   The DB schema (`membership`/`invitation`/`device`) and the pure `can()` authz gate exist; the CRUD
   service + HTTP surface do not (the router exposes only `/auth/*` and `/enroll/*`). Backend for NG-5.

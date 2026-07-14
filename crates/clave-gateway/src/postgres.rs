@@ -6,7 +6,8 @@ use clave_identity::{
 use sqlx::postgres::PgPoolOptions;
 use sqlx::{PgPool, Row};
 
-use crate::{DeviceId, GatewayError, Store};
+use crate::store::hex;
+use crate::{DeviceId, DeviceRecord, DeviceStatus, GatewayError, MemberRecord, Store};
 
 pub struct PgStore {
     pool: PgPool,
@@ -61,6 +62,37 @@ fn sso_to(s: SsoMode) -> &'static str {
         SsoMode::Required => "required",
         SsoMode::Optional => "optional",
     }
+}
+
+fn device_status_to(s: DeviceStatus) -> &'static str {
+    match s {
+        DeviceStatus::Pending => "pending",
+        DeviceStatus::Active => "active",
+        DeviceStatus::Locked => "locked",
+        DeviceStatus::Wiped => "wiped",
+    }
+}
+
+fn device_status_from(s: &str) -> DeviceStatus {
+    match s {
+        "pending" => DeviceStatus::Pending,
+        "locked" => DeviceStatus::Locked,
+        "wiped" => DeviceStatus::Wiped,
+        _ => DeviceStatus::Active,
+    }
+}
+
+fn device_record(row: &sqlx::postgres::PgRow) -> Result<DeviceRecord, GatewayError> {
+    let id: uuid::Uuid = row.try_get("id").map_err(store_err)?;
+    let enrolled_by: i64 = row.try_get("enrolled_by").map_err(store_err)?;
+    let pubkey: Vec<u8> = row.try_get("device_pubkey").map_err(store_err)?;
+    let status: String = row.try_get("status").map_err(store_err)?;
+    Ok(DeviceRecord {
+        id: DeviceId(id.as_u128()),
+        enrolled_by: UserId(enrolled_by as u64),
+        status: device_status_from(&status),
+        pubkey: hex(&pubkey),
+    })
 }
 
 impl PgStore {
@@ -270,5 +302,118 @@ impl Store for PgStore {
         .map_err(store_err)?;
         let id: uuid::Uuid = row.try_get("id").map_err(store_err)?;
         Ok(DeviceId(id.as_u128()))
+    }
+
+    async fn list_members(
+        &self,
+        workspace: WorkspaceId,
+    ) -> Result<Vec<MemberRecord>, GatewayError> {
+        let rows = sqlx::query(
+            "SELECT m.user_id, u.email, m.role, m.status FROM membership m \
+             JOIN app_user u ON u.id = m.user_id WHERE m.workspace_id = $1 ORDER BY m.user_id",
+        )
+        .bind(workspace.0 as i64)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(store_err)?;
+        rows.iter()
+            .map(|r| {
+                let user: i64 = r.try_get("user_id").map_err(store_err)?;
+                let email: String = r.try_get("email").map_err(store_err)?;
+                let role: String = r.try_get("role").map_err(store_err)?;
+                let status: String = r.try_get("status").map_err(store_err)?;
+                Ok(MemberRecord {
+                    user: UserId(user as u64),
+                    email,
+                    role: role_from(&role),
+                    status: status_from(&status),
+                })
+            })
+            .collect()
+    }
+
+    async fn put_invitation(&self, invitation: &Invitation) -> Result<(), GatewayError> {
+        self.upsert_invitation(invitation).await
+    }
+
+    async fn list_invitations(
+        &self,
+        workspace: WorkspaceId,
+    ) -> Result<Vec<Invitation>, GatewayError> {
+        let rows = sqlx::query(
+            "SELECT email, role, expires_at, accepted FROM invitation \
+             WHERE workspace_id = $1 ORDER BY email",
+        )
+        .bind(workspace.0 as i64)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(store_err)?;
+        rows.iter()
+            .map(|r| {
+                let email: String = r.try_get("email").map_err(store_err)?;
+                let role: String = r.try_get("role").map_err(store_err)?;
+                let expires_at: i64 = r.try_get("expires_at").map_err(store_err)?;
+                let accepted: bool = r.try_get("accepted").map_err(store_err)?;
+                Ok(Invitation {
+                    workspace,
+                    email: EmailAddr::parse(&email)
+                        .ok_or_else(|| store_err("stored email is invalid"))?,
+                    role: role_from(&role),
+                    expires_at: expires_at as u64,
+                    accepted,
+                })
+            })
+            .collect()
+    }
+
+    async fn list_devices(
+        &self,
+        workspace: WorkspaceId,
+    ) -> Result<Vec<DeviceRecord>, GatewayError> {
+        let rows = sqlx::query(
+            "SELECT id, enrolled_by, device_pubkey, status FROM device \
+             WHERE workspace_id = $1 ORDER BY enrolled_at",
+        )
+        .bind(workspace.0 as i64)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(store_err)?;
+        rows.iter().map(device_record).collect()
+    }
+
+    async fn device(
+        &self,
+        workspace: WorkspaceId,
+        device: DeviceId,
+    ) -> Result<Option<DeviceRecord>, GatewayError> {
+        let row = sqlx::query(
+            "SELECT id, enrolled_by, device_pubkey, status FROM device \
+             WHERE workspace_id = $1 AND id = $2",
+        )
+        .bind(workspace.0 as i64)
+        .bind(uuid::Uuid::from_u128(device.0))
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(store_err)?;
+        row.as_ref().map(device_record).transpose()
+    }
+
+    async fn set_device_status(
+        &self,
+        workspace: WorkspaceId,
+        device: DeviceId,
+        status: DeviceStatus,
+    ) -> Result<(), GatewayError> {
+        let result = sqlx::query("UPDATE device SET status = $3 WHERE workspace_id = $1 AND id = $2")
+            .bind(workspace.0 as i64)
+            .bind(uuid::Uuid::from_u128(device.0))
+            .bind(device_status_to(status))
+            .execute(&self.pool)
+            .await
+            .map_err(store_err)?;
+        if result.rows_affected() == 0 {
+            return Err(GatewayError::NotFound(format!("device {}", device.0)));
+        }
+        Ok(())
     }
 }

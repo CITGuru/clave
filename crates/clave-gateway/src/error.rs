@@ -3,6 +3,8 @@ use clave_identity::{DenyReason, InviteError};
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum GatewayError {
     Unauthorized(DenyReason),
+    Forbidden(String),
+    NotFound(String),
     Invite(InviteError),
     Idp(String),
     Store(String),
@@ -15,6 +17,8 @@ impl std::fmt::Display for GatewayError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             GatewayError::Unauthorized(r) => write!(f, "unauthorized: {r}"),
+            GatewayError::Forbidden(m) => write!(f, "forbidden: {m}"),
+            GatewayError::NotFound(m) => write!(f, "not found: {m}"),
             GatewayError::Invite(e) => write!(f, "invitation: {e}"),
             GatewayError::Idp(m) => write!(f, "identity provider error: {m}"),
             GatewayError::Store(m) => write!(f, "store error: {m}"),

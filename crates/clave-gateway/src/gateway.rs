@@ -1,15 +1,17 @@
 use std::sync::Arc;
 
 use clave_identity::{
-    accept_invitation, authorize_enrollment, authorize_login, EnrollmentDecision, LoginDecision,
-    MembershipStatus, Role, UnixTime, UserId, WorkspaceId,
+    accept_invitation, authorize_enrollment, authorize_login, can, min_role, AdminAction, EmailAddr,
+    EnrollmentDecision, Invitation, LoginDecision, Membership, MembershipStatus, Role, UnixTime,
+    UserId, WorkspaceId,
 };
 use clave_proto::SignedCommand;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    AuditLedger, DenyReason, DeviceId, GatewayError, IdentityProvider, IngestError, PolicyIssuer,
-    RequestContext, Session, SignedSpoolBatch, Store, VolumeKeyService, WrappedVolumeKey,
+    AuditLedger, DenyReason, DeviceId, DeviceRecord, DeviceStatus, GatewayError, IdentityProvider,
+    IngestError, MemberRecord, PolicyIssuer, RequestContext, Session, SignedSpoolBatch, Store,
+    VolumeKeyService, WrappedVolumeKey,
 };
 
 pub struct Gateway<I, S> {
@@ -221,5 +223,156 @@ impl<I: IdentityProvider, S: Store> Gateway<I, S> {
             EnrollmentDecision::Allow { role, .. } => Ok(Some((user, role))),
             EnrollmentDecision::Deny(r) => Err(GatewayError::Unauthorized(r)),
         }
+    }
+
+    fn require(ctx: &RequestContext, action: AdminAction) -> Result<(), GatewayError> {
+        if can(ctx.role, action) {
+            Ok(())
+        } else {
+            Err(GatewayError::Forbidden(format!(
+                "{action:?} requires at least {:?}",
+                min_role(action)
+            )))
+        }
+    }
+
+    async fn target_membership(
+        &self,
+        ctx: &RequestContext,
+        user: UserId,
+    ) -> Result<Membership, GatewayError> {
+        self.store
+            .membership(ctx.workspace, user)
+            .await?
+            .ok_or_else(|| GatewayError::NotFound(format!("member {}", user.0)))
+    }
+
+    pub async fn invite_member(
+        &self,
+        ctx: &RequestContext,
+        email: &str,
+        role: Role,
+        expires_at: UnixTime,
+    ) -> Result<Invitation, GatewayError> {
+        Self::require(ctx, AdminAction::ManageMembers)?;
+        if role > ctx.role {
+            return Err(GatewayError::Forbidden(
+                "cannot invite above your own role".into(),
+            ));
+        }
+        let email =
+            EmailAddr::parse(email).ok_or_else(|| GatewayError::Store("invalid email".into()))?;
+        let inv = Invitation {
+            workspace: ctx.workspace,
+            email,
+            role,
+            expires_at,
+            accepted: false,
+        };
+        self.store.put_invitation(&inv).await?;
+        Ok(inv)
+    }
+
+    pub async fn list_invitations(
+        &self,
+        ctx: &RequestContext,
+    ) -> Result<Vec<Invitation>, GatewayError> {
+        Self::require(ctx, AdminAction::ManageMembers)?;
+        self.store.list_invitations(ctx.workspace).await
+    }
+
+    pub async fn list_members(
+        &self,
+        ctx: &RequestContext,
+    ) -> Result<Vec<MemberRecord>, GatewayError> {
+        Self::require(ctx, AdminAction::ManageMembers)?;
+        self.store.list_members(ctx.workspace).await
+    }
+
+    pub async fn change_role(
+        &self,
+        ctx: &RequestContext,
+        user: UserId,
+        role: Role,
+    ) -> Result<(), GatewayError> {
+        Self::require(ctx, AdminAction::ChangeRoles)?;
+        if role > ctx.role {
+            return Err(GatewayError::Forbidden(
+                "cannot grant a role above your own".into(),
+            ));
+        }
+        let mut m = self.target_membership(ctx, user).await?;
+        if m.role > ctx.role {
+            return Err(GatewayError::Forbidden(
+                "cannot modify a more senior member".into(),
+            ));
+        }
+        m.role = role;
+        self.store.put_membership(&m).await
+    }
+
+    pub async fn suspend_member(
+        &self,
+        ctx: &RequestContext,
+        user: UserId,
+    ) -> Result<(), GatewayError> {
+        self.set_member_status(ctx, user, MembershipStatus::Suspended)
+            .await
+    }
+
+    pub async fn restore_member(
+        &self,
+        ctx: &RequestContext,
+        user: UserId,
+    ) -> Result<(), GatewayError> {
+        self.set_member_status(ctx, user, MembershipStatus::Active)
+            .await
+    }
+
+    async fn set_member_status(
+        &self,
+        ctx: &RequestContext,
+        user: UserId,
+        status: MembershipStatus,
+    ) -> Result<(), GatewayError> {
+        Self::require(ctx, AdminAction::ManageMembers)?;
+        let mut m = self.target_membership(ctx, user).await?;
+        if m.role > ctx.role {
+            return Err(GatewayError::Forbidden(
+                "cannot modify a more senior member".into(),
+            ));
+        }
+        m.status = status;
+        self.store.put_membership(&m).await
+    }
+
+    pub async fn list_devices(
+        &self,
+        ctx: &RequestContext,
+    ) -> Result<Vec<DeviceRecord>, GatewayError> {
+        Self::require(ctx, AdminAction::ViewAudit)?;
+        self.store.list_devices(ctx.workspace).await
+    }
+
+    pub async fn lock_device(
+        &self,
+        ctx: &RequestContext,
+        device: DeviceId,
+    ) -> Result<(), GatewayError> {
+        Self::require(ctx, AdminAction::ControlDevice)?;
+        self.store
+            .set_device_status(ctx.workspace, device, DeviceStatus::Locked)
+            .await
+    }
+
+    pub async fn wipe_device(
+        &self,
+        ctx: &RequestContext,
+        device: DeviceId,
+    ) -> Result<(), GatewayError> {
+        Self::require(ctx, AdminAction::ControlDevice)?;
+        self.store
+            .set_device_status(ctx.workspace, device, DeviceStatus::Wiped)
+            .await
     }
 }

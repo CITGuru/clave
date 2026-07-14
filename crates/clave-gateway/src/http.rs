@@ -11,12 +11,12 @@ use chacha20poly1305::{
     aead::{Aead, KeyInit},
     ChaCha20Poly1305, Key, Nonce,
 };
-use clave_identity::{Role, WorkspaceId};
+use clave_identity::{Role, UserId, WorkspaceId};
 use cookie::{Cookie, SameSite};
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
 
-use crate::{Gateway, GatewayError, IdentityProvider, Session, Store};
+use crate::{DeviceId, Gateway, GatewayError, IdentityProvider, RequestContext, Session, Store};
 
 pub const SESSION_COOKIE: &str = "clave_session";
 
@@ -86,7 +86,182 @@ pub fn build_router(state: AppState) -> Router {
         .route("/enroll/start", post(enroll_start))
         .route("/enroll/poll", post(enroll_poll))
         .route("/enroll/complete", post(enroll_complete))
+        .route("/admin/members", get(admin_list_members))
+        .route("/admin/members/invite", post(admin_invite))
+        .route("/admin/members/role", post(admin_change_role))
+        .route("/admin/members/suspend", post(admin_suspend))
+        .route("/admin/members/restore", post(admin_restore))
+        .route("/admin/invitations", get(admin_list_invitations))
+        .route("/admin/devices", get(admin_list_devices))
+        .route("/admin/devices/lock", post(admin_lock_device))
+        .route("/admin/devices/wipe", post(admin_wipe_device))
         .with_state(state)
+}
+
+async fn admin_ctx(st: &AppState, headers: &HeaderMap) -> Result<RequestContext, Response> {
+    let session = read_session(headers, &st.sealer)
+        .ok_or_else(|| (StatusCode::UNAUTHORIZED, "no session").into_response())?;
+    st.gateway
+        .authorize_request(&session, now())
+        .await
+        .map_err(err_response)
+}
+
+#[derive(Deserialize)]
+struct InviteBody {
+    email: String,
+    role: Role,
+    expires_at: Option<u64>,
+}
+
+#[derive(Deserialize)]
+struct UserBody {
+    user: u64,
+}
+
+#[derive(Deserialize)]
+struct RoleBody {
+    user: u64,
+    role: Role,
+}
+
+#[derive(Deserialize)]
+struct DeviceBody {
+    device: String,
+}
+
+async fn admin_list_members(State(st): State<AppState>, headers: HeaderMap) -> Response {
+    let ctx = match admin_ctx(&st, &headers).await {
+        Ok(c) => c,
+        Err(r) => return r,
+    };
+    match st.gateway.list_members(&ctx).await {
+        Ok(members) => Json(members).into_response(),
+        Err(e) => err_response(e),
+    }
+}
+
+async fn admin_invite(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Json(body): Json<InviteBody>,
+) -> Response {
+    let ctx = match admin_ctx(&st, &headers).await {
+        Ok(c) => c,
+        Err(r) => return r,
+    };
+    let expires_at = body.expires_at.unwrap_or_else(|| now() + 7 * 24 * 3600);
+    match st
+        .gateway
+        .invite_member(&ctx, &body.email, body.role, expires_at)
+        .await
+    {
+        Ok(inv) => Json(inv).into_response(),
+        Err(e) => err_response(e),
+    }
+}
+
+async fn admin_change_role(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Json(body): Json<RoleBody>,
+) -> Response {
+    let ctx = match admin_ctx(&st, &headers).await {
+        Ok(c) => c,
+        Err(r) => return r,
+    };
+    match st.gateway.change_role(&ctx, UserId(body.user), body.role).await {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(e) => err_response(e),
+    }
+}
+
+async fn admin_suspend(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Json(body): Json<UserBody>,
+) -> Response {
+    let ctx = match admin_ctx(&st, &headers).await {
+        Ok(c) => c,
+        Err(r) => return r,
+    };
+    match st.gateway.suspend_member(&ctx, UserId(body.user)).await {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(e) => err_response(e),
+    }
+}
+
+async fn admin_restore(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Json(body): Json<UserBody>,
+) -> Response {
+    let ctx = match admin_ctx(&st, &headers).await {
+        Ok(c) => c,
+        Err(r) => return r,
+    };
+    match st.gateway.restore_member(&ctx, UserId(body.user)).await {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(e) => err_response(e),
+    }
+}
+
+async fn admin_list_invitations(State(st): State<AppState>, headers: HeaderMap) -> Response {
+    let ctx = match admin_ctx(&st, &headers).await {
+        Ok(c) => c,
+        Err(r) => return r,
+    };
+    match st.gateway.list_invitations(&ctx).await {
+        Ok(invites) => Json(invites).into_response(),
+        Err(e) => err_response(e),
+    }
+}
+
+async fn admin_list_devices(State(st): State<AppState>, headers: HeaderMap) -> Response {
+    let ctx = match admin_ctx(&st, &headers).await {
+        Ok(c) => c,
+        Err(r) => return r,
+    };
+    match st.gateway.list_devices(&ctx).await {
+        Ok(devices) => Json(devices).into_response(),
+        Err(e) => err_response(e),
+    }
+}
+
+async fn admin_lock_device(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Json(body): Json<DeviceBody>,
+) -> Response {
+    let ctx = match admin_ctx(&st, &headers).await {
+        Ok(c) => c,
+        Err(r) => return r,
+    };
+    let Ok(id) = body.device.parse::<u128>() else {
+        return (StatusCode::BAD_REQUEST, "device must be a decimal u128").into_response();
+    };
+    match st.gateway.lock_device(&ctx, DeviceId(id)).await {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(e) => err_response(e),
+    }
+}
+
+async fn admin_wipe_device(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Json(body): Json<DeviceBody>,
+) -> Response {
+    let ctx = match admin_ctx(&st, &headers).await {
+        Ok(c) => c,
+        Err(r) => return r,
+    };
+    let Ok(id) = body.device.parse::<u128>() else {
+        return (StatusCode::BAD_REQUEST, "device must be a decimal u128").into_response();
+    };
+    match st.gateway.wipe_device(&ctx, DeviceId(id)).await {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(e) => err_response(e),
+    }
 }
 
 #[derive(Deserialize)]
@@ -246,9 +421,11 @@ fn now() -> u64 {
 
 fn err_response(e: GatewayError) -> Response {
     let code = match &e {
-        GatewayError::Unauthorized(_) | GatewayError::Invite(_) => StatusCode::FORBIDDEN,
+        GatewayError::Unauthorized(_) | GatewayError::Invite(_) | GatewayError::Forbidden(_) => {
+            StatusCode::FORBIDDEN
+        }
         GatewayError::SessionInvalid => StatusCode::UNAUTHORIZED,
-        GatewayError::NoSuchWorkspace => StatusCode::NOT_FOUND,
+        GatewayError::NoSuchWorkspace | GatewayError::NotFound(_) => StatusCode::NOT_FOUND,
         GatewayError::Idp(_) => StatusCode::BAD_GATEWAY,
         GatewayError::Store(_) | GatewayError::Counter(_) => StatusCode::INTERNAL_SERVER_ERROR,
     };
