@@ -57,3 +57,6 @@ axum = "0.8"
 serde_json = "1"
 # The wrapped-volume-key round-trip test unwraps the issued key with the device KEK.
 clave-volume = { path = "../clave-volume" }
+# The audit-query test signs device batches and emits events.
+clave-proto = { path = "../clave-proto" }
+clave-core = { path = "../clave-core" }

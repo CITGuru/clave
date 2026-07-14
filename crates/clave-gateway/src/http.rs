@@ -17,7 +17,8 @@ use rand::RngCore;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    DeviceId, Gateway, GatewayError, IdentityProvider, PolicyBundle, RequestContext, Session, Store,
+    DeviceId, Gateway, GatewayError, IdentityProvider, IngestError, PolicyBundle, RequestContext,
+    Session, SignedSpoolBatch, Store,
 };
 
 pub const SESSION_COOKIE: &str = "clave_session";
@@ -100,7 +101,64 @@ pub fn build_router(state: AppState) -> Router {
         .route("/admin/policy", get(admin_get_policy).post(admin_author_policy))
         .route("/admin/policy/versions", get(admin_policy_versions))
         .route("/admin/policy/reissue", post(admin_reissue_policy))
+        .route("/admin/audit", get(admin_audit_events))
+        .route("/admin/audit/alerts", get(admin_audit_alerts))
+        .route("/audit/ingest", post(audit_ingest))
         .with_state(state)
+}
+
+#[derive(Deserialize)]
+struct AuditIngestBody {
+    device: String,
+    batch: SignedSpoolBatch,
+}
+
+#[derive(Serialize)]
+struct Admitted {
+    admitted: usize,
+}
+
+fn audit_err_response(e: IngestError) -> Response {
+    let code = match &e {
+        IngestError::UnknownDevice(_) => StatusCode::NOT_FOUND,
+        IngestError::Rejected(_) => StatusCode::CONFLICT,
+    };
+    (code, e.to_string()).into_response()
+}
+
+async fn audit_ingest(State(st): State<AppState>, Json(body): Json<AuditIngestBody>) -> Response {
+    let Ok(id) = body.device.parse::<u128>() else {
+        return (StatusCode::BAD_REQUEST, "device must be a decimal u128").into_response();
+    };
+    match st.gateway.ingest_device_audit(DeviceId(id), &body.batch) {
+        Ok(events) => Json(Admitted {
+            admitted: events.len(),
+        })
+        .into_response(),
+        Err(e) => audit_err_response(e),
+    }
+}
+
+async fn admin_audit_events(State(st): State<AppState>, headers: HeaderMap) -> Response {
+    let ctx = match admin_ctx(&st, &headers).await {
+        Ok(c) => c,
+        Err(r) => return r,
+    };
+    match st.gateway.audit_events(&ctx).await {
+        Ok(events) => Json(events).into_response(),
+        Err(e) => err_response(e),
+    }
+}
+
+async fn admin_audit_alerts(State(st): State<AppState>, headers: HeaderMap) -> Response {
+    let ctx = match admin_ctx(&st, &headers).await {
+        Ok(c) => c,
+        Err(r) => return r,
+    };
+    match st.gateway.audit_alerts(&ctx).await {
+        Ok(alerts) => Json(alerts).into_response(),
+        Err(e) => err_response(e),
+    }
 }
 
 async fn admin_ctx(st: &AppState, headers: &HeaderMap) -> Result<RequestContext, Response> {

@@ -3,8 +3,22 @@ use std::sync::Mutex;
 
 use clave_core::AuditEvent;
 use clave_proto::{verify_batch, AuditError, ChainHash, SignedSpoolBatch};
+use serde::Serialize;
 
 use crate::DeviceId;
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct AuditAlert {
+    pub device: DeviceId,
+    pub kind: String,
+    pub detail: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct AuditRecord {
+    pub device: DeviceId,
+    pub event: AuditEvent,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum IngestError {
@@ -33,6 +47,7 @@ struct DeviceChain {
 pub struct AuditLedger {
     chains: Mutex<HashMap<DeviceId, DeviceChain>>,
     verified: Mutex<Vec<(DeviceId, AuditEvent)>>,
+    alerts: Mutex<Vec<AuditAlert>>,
 }
 
 impl AuditLedger {
@@ -61,8 +76,13 @@ impl AuditLedger {
             .get_mut(&device)
             .ok_or(IngestError::UnknownDevice(device))?;
 
-        let new_head = verify_batch(chain.head, chain.next_seq, batch, chain.public_key)
-            .map_err(IngestError::Rejected)?;
+        let new_head = match verify_batch(chain.head, chain.next_seq, batch, chain.public_key) {
+            Ok(head) => head,
+            Err(e) => {
+                self.record_alert(device, &e);
+                return Err(IngestError::Rejected(e));
+            }
+        };
 
         let events: Vec<AuditEvent> = batch.entries.iter().map(|e| e.event).collect();
         chain.next_seq += events.len() as u64;
@@ -91,6 +111,29 @@ impl AuditLedger {
             .filter(|(d, _)| *d == device)
             .map(|(_, e)| *e)
             .collect()
+    }
+
+    pub fn alerts(&self) -> Vec<AuditAlert> {
+        self.alerts.lock().expect("ledger lock").clone()
+    }
+
+    fn record_alert(&self, device: DeviceId, error: &AuditError) {
+        let (kind, detail) = match error {
+            AuditError::Gap { expected, got } => (
+                "gap",
+                format!("suppressed batch: expected seq {expected}, got {got}"),
+            ),
+            AuditError::Tampered { seq } => ("tampered", format!("event {seq} was rewritten")),
+            AuditError::BadSignature => {
+                ("bad_signature", "batch signature does not verify".to_string())
+            }
+            other => ("rejected", other.to_string()),
+        };
+        self.alerts.lock().expect("ledger lock").push(AuditAlert {
+            device,
+            kind: kind.to_string(),
+            detail,
+        });
     }
 }
 

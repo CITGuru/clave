@@ -15,7 +15,7 @@ mod postgres;
 #[cfg(feature = "workos")]
 mod workos;
 
-pub use audit_ingest::{AuditLedger, IngestError};
+pub use audit_ingest::{AuditAlert, AuditLedger, AuditRecord, IngestError};
 pub use error::GatewayError;
 pub use gateway::{EnrollmentCompletion, EnrollmentOutcome, Gateway};
 pub use http::{build_router, AppState, DynGateway, SessionSealer, SESSION_COOKIE};

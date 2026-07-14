@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use clave_identity::{
@@ -10,9 +11,9 @@ use clave_proto::SignedCommand;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    AuditLedger, DenyReason, DeviceId, DeviceRecord, DeviceStatus, GatewayError, IdentityProvider,
-    IngestError, MemberRecord, PolicyIssuer, RequestContext, Session, SignedSpoolBatch, Store,
-    VolumeKeyService, WrappedVolumeKey,
+    AuditAlert, AuditLedger, AuditRecord, DenyReason, DeviceId, DeviceRecord, DeviceStatus,
+    GatewayError, IdentityProvider, IngestError, MemberRecord, PolicyIssuer, RequestContext,
+    Session, SignedSpoolBatch, Store, VolumeKeyService, WrappedVolumeKey,
 };
 
 pub struct Gateway<I, S> {
@@ -424,5 +425,40 @@ impl<I: IdentityProvider, S: Store> Gateway<I, S> {
             Some(issuer) => issuer.policy_versions(ctx.workspace).await,
             None => Ok(Vec::new()),
         }
+    }
+
+    pub async fn audit_events(
+        &self,
+        ctx: &RequestContext,
+    ) -> Result<Vec<AuditRecord>, GatewayError> {
+        Self::require(ctx, AdminAction::ViewAudit)?;
+        let devices = self.store.list_devices(ctx.workspace).await?;
+        let mut out = Vec::new();
+        for d in devices {
+            for event in self.audit.events_for(d.id) {
+                out.push(AuditRecord { device: d.id, event });
+            }
+        }
+        Ok(out)
+    }
+
+    pub async fn audit_alerts(
+        &self,
+        ctx: &RequestContext,
+    ) -> Result<Vec<AuditAlert>, GatewayError> {
+        Self::require(ctx, AdminAction::ViewAudit)?;
+        let ids: HashSet<DeviceId> = self
+            .store
+            .list_devices(ctx.workspace)
+            .await?
+            .into_iter()
+            .map(|d| d.id)
+            .collect();
+        Ok(self
+            .audit
+            .alerts()
+            .into_iter()
+            .filter(|a| ids.contains(&a.device))
+            .collect())
     }
 }
