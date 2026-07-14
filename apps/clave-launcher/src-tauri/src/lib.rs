@@ -33,6 +33,13 @@ pub struct CapStatus {
 }
 
 #[derive(Serialize)]
+pub struct WebApp {
+    id: String,
+    label: String,
+    url: String,
+}
+
+#[derive(Serialize)]
 pub struct StatusInfo {
     connected: bool,
     tenant: u64,
@@ -150,6 +157,39 @@ async fn enforcement() -> Vec<CapStatus> {
 }
 
 #[tauri::command]
+async fn list_web_apps() -> Vec<WebApp> {
+    #[cfg(any(unix, windows))]
+    if let Some(mut client) = daemon().await {
+        if let Ok(apps) = client.list_web_apps().await {
+            return apps
+                .into_iter()
+                .map(|a| WebApp {
+                    id: a.app_id.0,
+                    label: a.label,
+                    url: a.url,
+                })
+                .collect();
+        }
+    }
+    Vec::new()
+}
+
+#[tauri::command]
+async fn launch_web(app_id: String) -> Result<u32, String> {
+    #[cfg(any(unix, windows))]
+    if let Some(mut client) = daemon().await {
+        return match client.launch_web(AppId(app_id)).await {
+            Ok(Some(pid)) => Ok(pid),
+            Ok(None) => Err("launch returned no pid".into()),
+            Err(clave_ipc::transport::TransportError::LaunchFailed(e)) => Err(e),
+            Err(e) => Err(e.to_string()),
+        };
+    }
+    let _ = app_id;
+    Err("daemon not running".into())
+}
+
+#[tauri::command]
 async fn status() -> StatusInfo {
     #[cfg(any(unix, windows))]
     if let Some(mut client) = daemon().await {
@@ -243,7 +283,9 @@ pub fn run() {
             launch_spec,
             launch_app,
             enforcement,
-            status
+            status,
+            list_web_apps,
+            launch_web
         ])
         .run(tauri::generate_context!())
         .expect("error while running the Clave app");

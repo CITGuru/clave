@@ -6,7 +6,7 @@ use arc_swap::ArcSwap;
 use clave_core::{
     classify_exec, decide, Action, AppId, AuditAction, AuditEvent, AuditSink, BinaryMatch,
     DnsDecision, ExecVerdict, JoinReason, LaunchSpec, LaunchableApp, PathClass, PolicyBundle,
-    Reason, ResolvedLaunch, UnixTime, Verdict, ZoneRegistry,
+    Reason, ResolvedLaunch, UnixTime, Verdict, WebAppInfo, ZoneRegistry,
 };
 use clave_ipc::{DaemonMsg, LauncherReply, LauncherRequest, LauncherStatus, ShimMsg};
 use clave_net::{FlowDisposition, FlowId, Inbound, Outbound, SplitRouter, Tunnel};
@@ -239,6 +239,42 @@ impl Daemon {
         Ok(launched)
     }
 
+    pub fn web_apps(&self) -> Vec<WebAppInfo> {
+        let policy = self.policy.load();
+        if !policy.web.is_launchable() {
+            return Vec::new();
+        }
+        policy
+            .web
+            .apps
+            .iter()
+            .map(|r| WebAppInfo {
+                app_id: r.id.clone(),
+                label: r.label().to_string(),
+                url: r.url.clone(),
+            })
+            .collect()
+    }
+
+    pub fn prepare_web_launch(&self, app_id: &AppId) -> Option<LaunchSpec> {
+        let mount = self.platform.volume().mount_point()?;
+        let policy = self.policy.load();
+        if !policy.web.is_launchable() {
+            return None;
+        }
+        let rule = policy.web.rule(app_id)?;
+        Some(rule.launch_spec(&policy.web.browser, &mount, &contained_user()))
+    }
+
+    pub fn launch_web(&self, app_id: &AppId, now: UnixTime) -> Result<LaunchedApp, LaunchError> {
+        let spec = self
+            .prepare_web_launch(app_id)
+            .ok_or(LaunchError::NotLaunchable)?;
+        let launched = spawn_contained(&spec).map_err(LaunchError::Spawn)?;
+        self.on_zone_join(launched.proc, JoinReason::Launcher, now);
+        Ok(launched)
+    }
+
     pub fn decide_action(&self, action: &Action, now: UnixTime) -> Verdict {
         let pol = self.policy.load_full();
         let verdict = decide(action, &self.zones, &pol, now);
@@ -368,6 +404,17 @@ impl Daemon {
             },
             LauncherRequest::Status => LauncherReply::Status {
                 status: self.launcher_status(),
+            },
+            LauncherRequest::ListWebApps => LauncherReply::WebApps {
+                apps: self.web_apps(),
+            },
+            LauncherRequest::LaunchWeb { app_id } => match self.launch_web(&app_id, now) {
+                Ok(launched) => LauncherReply::Launched {
+                    pid: Some(launched.pid),
+                },
+                Err(e) => LauncherReply::LaunchFailed {
+                    error: e.to_string(),
+                },
             },
         }
     }

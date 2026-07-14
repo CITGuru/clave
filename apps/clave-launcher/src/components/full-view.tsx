@@ -27,6 +27,7 @@ import { launchApp } from "@/lib/launch";
 
 type AppInfo = { id: string; label: string };
 type CapStatus = { capability: string; status: string };
+type WebApp = { id: string; label: string; url: string };
 type StatusInfo = {
   connected: boolean;
   tenant: number;
@@ -254,6 +255,7 @@ export function FullView({
   const [apps, setApps] = useState<AppInfo[]>([]);
   const [posture, setPosture] = useState<CapStatus[]>([]);
   const [status, setStatus] = useState<StatusInfo | null>(null);
+  const [webApps, setWebApps] = useState<WebApp[]>([]);
   const [query, setQuery] = useState("");
   const [section, setSection] = useState<Section>(initialSection);
   const [toast, setToast] = useState<string | null>(null);
@@ -267,6 +269,7 @@ export function FullView({
     invoke<AppInfo[]>("list_apps").then(setApps).catch(console.error);
     invoke<CapStatus[]>("enforcement").then(setPosture).catch(console.error);
     invoke<StatusInfo>("status").then(setStatus).catch(console.error);
+    invoke<WebApp[]>("list_web_apps").then(setWebApps).catch(console.error);
   }, []);
 
   const filtered = useMemo(
@@ -497,11 +500,44 @@ export function FullView({
           )}
 
           {section === "websites" && (
-            <Placeholder
-              title="Websites"
-              icon={Globe}
-              text="Work web apps appear here once your policy defines them."
-            />
+            <div>
+              <h1 className="text-[26px] font-semibold tracking-tight">Websites</h1>
+              <p className="mb-6 mt-3 text-[13px] text-zinc-500">
+                Work web apps open in a contained browser profile on the Clave Disk.
+              </p>
+              {webApps.length === 0 ? (
+                <div className="mt-12 flex flex-col items-center gap-3 text-center">
+                  <div className="grid h-12 w-12 place-items-center rounded-2xl bg-zinc-100 text-zinc-400">
+                    <Globe className="h-6 w-6" />
+                  </div>
+                  <p className="max-w-sm text-sm text-zinc-500">
+                    Work web apps appear here once your policy defines them.
+                  </p>
+                </div>
+              ) : (
+                <div className="max-w-xl divide-y divide-zinc-100 overflow-hidden rounded-xl border border-zinc-200">
+                  {webApps.map((w) => (
+                    <div key={w.id} className="flex items-center gap-3 px-4 py-3">
+                      <Globe className="h-4 w-4 shrink-0 text-zinc-400" />
+                      <div className="min-w-0 flex-1">
+                        <div className="truncate text-[13px] text-zinc-800">{w.label}</div>
+                        <div className="truncate text-[11px] text-zinc-400">{w.url}</div>
+                      </div>
+                      <button
+                        className="rounded-md bg-zinc-900 px-3 py-1.5 text-[12px] font-medium text-white hover:bg-zinc-700"
+                        onClick={() => {
+                          invoke<number>("launch_web", { appId: w.id })
+                            .then(() => setToast(`Opening ${w.label}…`))
+                            .catch((e) => setToast(String(e)));
+                        }}
+                      >
+                        Open
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
           )}
           {section === "notifications" && (
             <Placeholder

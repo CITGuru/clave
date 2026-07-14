@@ -1,13 +1,13 @@
 #![forbid(unsafe_code)]
 
-use clave_core::{Action, AppId, LaunchSpec, LaunchableApp, Verdict};
+use clave_core::{Action, AppId, LaunchSpec, LaunchableApp, Verdict, WebAppInfo};
 use clave_platform::WindowId;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 
 #[cfg(any(unix, windows))]
 pub mod transport;
 
-pub const PROTO_VERSION: u16 = 5;
+pub const PROTO_VERSION: u16 = 6;
 
 pub const MAX_FRAME: usize = 1 << 20;
 
@@ -36,6 +36,8 @@ pub enum LauncherRequest {
     Launch { app_id: AppId },
     Enforcement,
     Status,
+    ListWebApps,
+    LaunchWeb { app_id: AppId },
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
@@ -47,6 +49,7 @@ pub enum LauncherReply {
     LaunchFailed { error: String },
     Enforcement { caps: Vec<(String, String)> },
     Status { status: LauncherStatus },
+    WebApps { apps: Vec<WebAppInfo> },
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]

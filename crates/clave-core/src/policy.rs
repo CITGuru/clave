@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use crate::app::AppPolicy;
 use crate::net::{DnsSteering, NetworkProvider};
 use crate::overlay::BorderCfg;
+use crate::web::WebPolicy;
 
 pub type UnixTime = u64;
 
@@ -21,6 +22,8 @@ pub struct PolicyBundle {
     pub screen: ScreenPolicy,
     #[serde(default)]
     pub input: InputPolicy,
+    #[serde(default)]
+    pub web: WebPolicy,
 }
 
 impl PolicyBundle {
@@ -46,6 +49,7 @@ impl PolicyBundle {
             overlay: OverlayPolicy::default(),
             screen: ScreenPolicy::default(),
             input: InputPolicy::default(),
+            web: WebPolicy::default(),
         }
     }
 }

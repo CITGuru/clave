@@ -96,7 +96,7 @@ receives a real signed policy, and reports audit back.
   `volume_is_unlocked()`, `checkpoint()`) carrying enrolled device/tenant/policy-version/mount/last-sync,
   and a panel to show it. *Files:* `clave-ipc/src/lib.rs`, `clave-daemon/src/lib.rs`, `clave-launcher/src/components/full-view.tsx`.
 
-- [ ] **NG-12 — Web-app catalog + contained-browser launch (doc 17 Phase A).** **M**
+- [x] **NG-12 — Web-app catalog + contained-browser launch (doc 17 Phase A).** **M**
   The launcher "Websites" tab is a `<Placeholder>`. The portable slice: a `WebPolicy`/`PersonaRule`/
   `WebAppRule` model, list work web apps, and spawn a contained browser via the existing
   `LaunchProfile::chromium()` + `--app=<url>` path. Doc 17 §8 Phase A is explicitly "Blocked on: —".
