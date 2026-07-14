@@ -16,7 +16,9 @@ mod postgres;
 #[cfg(feature = "workos")]
 mod workos;
 
-pub use audit_ingest::{AuditAlert, AuditLedger, AuditRecord, IngestError};
+pub use audit_ingest::{
+    AuditAlert, AuditLedger, AuditRecord, AuditStore, IngestError, MemAuditStore, PersistedChain,
+};
 pub use error::GatewayError;
 pub use gateway::{EnrollmentCompletion, EnrollmentOutcome, Gateway};
 pub use http::{build_router, AppState, DynGateway, SessionSealer, SESSION_COOKIE};
@@ -34,7 +36,7 @@ pub use clave_proto::{
 };
 
 #[cfg(feature = "postgres")]
-pub use postgres::PgStore;
+pub use postgres::{PgAuditStore, PgStore};
 #[cfg(feature = "workos")]
 pub use workos::{WorkosProvider, WorkspaceResolver};
 

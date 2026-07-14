@@ -1,11 +1,12 @@
 use std::collections::HashMap;
 use std::sync::Mutex;
 
+use async_trait::async_trait;
 use clave_core::AuditEvent;
-use clave_proto::{verify_batch, AuditError, ChainHash, SignedSpoolBatch};
+use clave_proto::{verify_batch, AuditError, ChainHash, SignedSpoolBatch, SpoolEntry, GENESIS};
 use serde::Serialize;
 
-use crate::DeviceId;
+use crate::{DeviceId, GatewayError};
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct AuditAlert {
@@ -66,6 +67,23 @@ impl AuditLedger {
         );
     }
 
+    pub fn restore_device(
+        &self,
+        device: DeviceId,
+        public_key: [u8; 32],
+        next_seq: u64,
+        head: ChainHash,
+    ) {
+        self.chains.lock().expect("ledger lock").insert(
+            device,
+            DeviceChain {
+                public_key,
+                next_seq,
+                head,
+            },
+        );
+    }
+
     pub fn ingest(
         &self,
         device: DeviceId,
@@ -103,6 +121,14 @@ impl AuditLedger {
             .map(|c| c.next_seq)
     }
 
+    pub fn head_for(&self, device: DeviceId) -> Option<ChainHash> {
+        self.chains
+            .lock()
+            .expect("ledger lock")
+            .get(&device)
+            .map(|c| c.head)
+    }
+
     pub fn events_for(&self, device: DeviceId) -> Vec<AuditEvent> {
         self.verified
             .lock()
@@ -134,6 +160,108 @@ impl AuditLedger {
             kind: kind.to_string(),
             detail,
         });
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PersistedChain {
+    pub device: DeviceId,
+    pub public_key: [u8; 32],
+    pub next_seq: u64,
+    pub head: ChainHash,
+}
+
+#[async_trait]
+pub trait AuditStore: Send + Sync {
+    async fn register(&self, device: DeviceId, public_key: [u8; 32]) -> Result<(), GatewayError>;
+    async fn append(
+        &self,
+        device: DeviceId,
+        entries: &[SpoolEntry],
+        next_seq: u64,
+        head: ChainHash,
+    ) -> Result<(), GatewayError>;
+    async fn record_alert(&self, alert: &AuditAlert) -> Result<(), GatewayError>;
+    async fn load_chains(&self) -> Result<Vec<PersistedChain>, GatewayError>;
+}
+
+#[derive(Default)]
+pub struct MemAuditStore {
+    inner: Mutex<MemAuditState>,
+}
+
+#[derive(Default)]
+struct MemAuditState {
+    chains: HashMap<DeviceId, PersistedChain>,
+    events: Vec<(DeviceId, u64, AuditEvent)>,
+    alerts: Vec<AuditAlert>,
+}
+
+impl MemAuditStore {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn event_count(&self) -> usize {
+        self.inner.lock().expect("store lock").events.len()
+    }
+
+    pub fn alert_count(&self) -> usize {
+        self.inner.lock().expect("store lock").alerts.len()
+    }
+}
+
+#[async_trait]
+impl AuditStore for MemAuditStore {
+    async fn register(&self, device: DeviceId, public_key: [u8; 32]) -> Result<(), GatewayError> {
+        self.inner.lock().expect("store lock").chains.insert(
+            device,
+            PersistedChain {
+                device,
+                public_key,
+                next_seq: 1,
+                head: GENESIS,
+            },
+        );
+        Ok(())
+    }
+
+    async fn append(
+        &self,
+        device: DeviceId,
+        entries: &[SpoolEntry],
+        next_seq: u64,
+        head: ChainHash,
+    ) -> Result<(), GatewayError> {
+        let mut s = self.inner.lock().expect("store lock");
+        if let Some(chain) = s.chains.get_mut(&device) {
+            chain.next_seq = next_seq;
+            chain.head = head;
+        }
+        for e in entries {
+            s.events.push((device, e.seq, e.event.clone()));
+        }
+        Ok(())
+    }
+
+    async fn record_alert(&self, alert: &AuditAlert) -> Result<(), GatewayError> {
+        self.inner
+            .lock()
+            .expect("store lock")
+            .alerts
+            .push(alert.clone());
+        Ok(())
+    }
+
+    async fn load_chains(&self) -> Result<Vec<PersistedChain>, GatewayError> {
+        Ok(self
+            .inner
+            .lock()
+            .expect("store lock")
+            .chains
+            .values()
+            .cloned()
+            .collect())
     }
 }
 

@@ -163,7 +163,7 @@ async fn audit_ingest(State(st): State<AppState>, Json(body): Json<AuditIngestBo
     let Ok(id) = body.device.parse::<u128>() else {
         return (StatusCode::BAD_REQUEST, "device must be a decimal u128").into_response();
     };
-    match st.gateway.ingest_device_audit(DeviceId(id), &body.batch) {
+    match st.gateway.ingest_device_audit(DeviceId(id), &body.batch).await {
         Ok(events) => Json(Admitted {
             admitted: events.len(),
         })

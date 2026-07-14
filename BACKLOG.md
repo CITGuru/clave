@@ -64,7 +64,6 @@ receives a real signed policy, and reports audit back.
   *Files:* `clave-gateway/src/policy.rs`. Doc 10 §1–2, doc 15 §7.
 
 - [x] **NG-7 — Audit ingest endpoint + persistence + query/report API.** **M** · *rides NG-3*
-      *(endpoints + query + suppression alerts done; ledger runs in-memory against the new audit schema — the PgStore-backed ledger read/write is the remaining wiring.)*
   `AuditLedger::ingest` verifies the hash-chain and detects gaps/tamper (tested) but is in-memory,
   wired to no HTTP route, and not persisted to Postgres. Add the drain endpoint, audit tables, a
   query/report API for the console, and a suppression-alert surface. `Gateway::ingest_device_audit`

@@ -11,9 +11,10 @@ use clave_proto::SignedCommand;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    AuditAlert, AuditLedger, AuditRecord, DenyReason, DeviceId, DeviceRecord, DeviceStatus,
-    GatewayError, IdentityProvider, IngestError, MemberRecord, MembershipDelta, PolicyIssuer,
-    RequestContext, ScimEvent, Session, SignedSpoolBatch, Store, VolumeKeyService, WrappedVolumeKey,
+    AuditAlert, AuditLedger, AuditRecord, AuditStore, DenyReason, DeviceId, DeviceRecord,
+    DeviceStatus, GatewayError, IdentityProvider, IngestError, MemberRecord, MembershipDelta,
+    PolicyIssuer, RequestContext, ScimEvent, Session, SignedSpoolBatch, Store, VolumeKeyService,
+    WrappedVolumeKey,
 };
 
 pub struct Gateway<I, S> {
@@ -22,6 +23,7 @@ pub struct Gateway<I, S> {
     policy_issuer: Option<Arc<dyn PolicyIssuer>>,
     volume_keys: Option<Arc<dyn VolumeKeyService>>,
     audit: Arc<AuditLedger>,
+    audit_store: Option<Arc<dyn AuditStore>>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -52,15 +54,53 @@ impl<I: IdentityProvider, S: Store> Gateway<I, S> {
             policy_issuer: None,
             volume_keys: None,
             audit: Arc::new(AuditLedger::new()),
+            audit_store: None,
         }
     }
 
-    pub fn ingest_device_audit(
+    pub fn with_audit_store(mut self, store: Arc<dyn AuditStore>) -> Self {
+        self.audit_store = Some(store);
+        self
+    }
+
+    pub async fn ingest_device_audit(
         &self,
         device: DeviceId,
         batch: &SignedSpoolBatch,
     ) -> Result<Vec<clave_core::AuditEvent>, IngestError> {
-        self.audit.ingest(device, batch)
+        let result = self.audit.ingest(device, batch);
+        let Some(store) = &self.audit_store else {
+            return result;
+        };
+        match &result {
+            Ok(_) => {
+                let next_seq = self.audit.high_water(device).unwrap_or(1);
+                let head = self.audit.head_for(device).unwrap_or(clave_proto::GENESIS);
+                if let Err(e) = store.append(device, &batch.entries, next_seq, head).await {
+                    eprintln!("clave-gateway: audit persist failed for device {:x}: {e}", device.0);
+                }
+            }
+            Err(_) => {
+                if let Some(alert) = self.audit.alerts().into_iter().rev().find(|a| a.device == device)
+                {
+                    let _ = store.record_alert(&alert).await;
+                }
+            }
+        }
+        result
+    }
+
+    pub async fn hydrate_audit(&self) -> Result<usize, GatewayError> {
+        let Some(store) = &self.audit_store else {
+            return Ok(0);
+        };
+        let chains = store.load_chains().await?;
+        let n = chains.len();
+        for c in chains {
+            self.audit
+                .restore_device(c.device, c.public_key, c.next_seq, c.head);
+        }
+        Ok(n)
     }
 
     pub fn audit(&self) -> &Arc<AuditLedger> {
@@ -210,6 +250,9 @@ impl<I: IdentityProvider, S: Store> Gateway<I, S> {
                     .record_device(workspace, user, device_pubkey)
                     .await?;
                 self.audit.register_device(device, *device_pubkey);
+                if let Some(store) = &self.audit_store {
+                    let _ = store.register(device, *device_pubkey).await;
+                }
                 let policy = match &self.policy_issuer {
                     Some(issuer) => issuer.issue_initial_policy(workspace, now).await?,
                     None => None,
