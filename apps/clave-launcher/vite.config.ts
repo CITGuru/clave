@@ -6,5 +6,9 @@ export default defineConfig({
   plugins: [react()],
   resolve: { alias: { "@": path.resolve(__dirname, "./src") } },
   clearScreen: false,
-  server: { port: 1430, strictPort: true },
+  server: {
+    port: 1430,
+    strictPort: true,
+    watch: { ignored: ["**/src-tauri/**"] },
+  },
 });

@@ -3,8 +3,8 @@ use std::sync::{Arc, Mutex};
 use clave_core::ZoneRegistry;
 use clave_platform::{
     Capability, ClipFormat, ClipboardBroker, Decision, EnforcementStatus, InputGuard,
-    NetworkTunnel, PResult, Platform, ProcId, ProcessSupervisor, Rgba, Route, ScreenGuard,
-    VolumeMount, WindowId, WindowOverlay, Zone,
+    NetworkTunnel, PResult, Platform, ProcId, ProcessContainment, ProcessSupervisor, Rgba, Route,
+    ScreenGuard, VolumeMount, WindowId, WindowOverlay, Zone,
 };
 
 pub struct WinNetwork {
@@ -17,15 +17,29 @@ impl NetworkTunnel for WinNetwork {
     }
 }
 
+/// The Windows Clave Disk mount. Until the WinFsp mount + TPM key store land (doc 04, appendix
+/// A.3), `mount_point` only advertises *where* the disk will mount so the launcher can resolve
+/// each app's contained launch spec — the `Volume` capability stays `Unavailable` in the
+/// enforcement report, which is the honest signal that no encrypted volume is actually enforced.
 #[derive(Default)]
-pub struct WinVolumeMount;
+pub struct WinVolumeMount {
+    mount_point: Option<String>,
+}
+
+impl WinVolumeMount {
+    pub fn with_mount_point(mount_point: impl Into<String>) -> Self {
+        Self {
+            mount_point: Some(mount_point.into()),
+        }
+    }
+}
 
 impl VolumeMount for WinVolumeMount {
     fn is_mounted(&self) -> bool {
-        false
+        self.mount_point.is_some()
     }
     fn mount_point(&self) -> Option<String> {
-        None
+        self.mount_point.clone()
     }
     fn request_wipe(&self) -> PResult<()> {
         Ok(())
@@ -79,6 +93,7 @@ pub struct WindowsPlatform {
     screen: WinScreen,
     overlay: WinOverlay,
     input: WinInput,
+    containment: Option<Arc<dyn ProcessContainment>>,
     enforcement: Mutex<[(Capability, EnforcementStatus); Capability::COUNT]>,
 }
 
@@ -90,13 +105,26 @@ impl WindowsPlatform {
         Self {
             zones,
             network,
-            volume: WinVolumeMount,
+            volume: WinVolumeMount::default(),
             clipboard: WinClipboard,
             screen: WinScreen,
             overlay: WinOverlay,
             input: WinInput,
+            containment: None,
             enforcement: Mutex::new(default_enforcement()),
         }
+    }
+
+    /// Advertise the Clave Disk mount point so the launcher can resolve contained launch specs.
+    /// Does not change the `Volume` enforcement status (still `Unavailable` without WinFsp).
+    pub fn configure_volume(&mut self, mount_point: impl Into<String>) {
+        self.volume = WinVolumeMount::with_mount_point(mount_point);
+    }
+
+    /// Install the Job Object that launched work apps are contained in, so `launch` places each
+    /// app (and its process tree) under the boundary.
+    pub fn configure_containment(&mut self, containment: Arc<dyn ProcessContainment>) {
+        self.containment = Some(containment);
     }
 
     pub fn set_enforcement(&self, cap: Capability, status: EnforcementStatus) {
@@ -157,6 +185,10 @@ impl Platform for WindowsPlatform {
             .find(|e| e.0 == cap)
             .map(|e| e.1)
             .unwrap_or(EnforcementStatus::Unavailable)
+    }
+
+    fn containment(&self) -> Option<&dyn ProcessContainment> {
+        self.containment.as_deref()
     }
 }
 

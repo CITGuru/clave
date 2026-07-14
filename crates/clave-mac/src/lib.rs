@@ -1,6 +1,8 @@
 #![allow(unexpected_cfgs)]
 
-use clave_core::{classify_exec, AppPolicy, BinaryMatch, JoinReason, PolicyBundle, ZoneRegistry};
+use clave_core::{classify_exec, AppPolicy, BinaryMatch, JoinReason, ZoneRegistry};
+#[cfg(target_os = "macos")]
+use clave_core::PolicyBundle;
 use clave_platform::{ProcId, Route};
 use std::ffi::CStr;
 use std::os::raw::c_char;
@@ -56,6 +58,45 @@ mod se_seal;
 
 #[cfg(target_os = "macos")]
 mod volume;
+// Stub so `MacPlatform` (and the rest of this crate) still compiles on
+// Linux/Windows CI; the real `hdiutil` + Keychain + SE mount is macOS-only.
+#[cfg(not(target_os = "macos"))]
+mod volume {
+    use std::path::PathBuf;
+
+    use clave_platform::{PResult, VolumeMount};
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub enum Custody {
+        RequireHardware,
+        AllowPlainFallback,
+    }
+
+    #[derive(Default)]
+    pub struct MacVolumeMount;
+
+    impl MacVolumeMount {
+        pub fn new(
+            _container: u128,
+            _bundle_path: impl Into<PathBuf>,
+            _custody: Custody,
+        ) -> Self {
+            Self
+        }
+    }
+
+    impl VolumeMount for MacVolumeMount {
+        fn is_mounted(&self) -> bool {
+            false
+        }
+        fn mount_point(&self) -> Option<String> {
+            None
+        }
+        fn request_wipe(&self) -> PResult<()> {
+            Ok(())
+        }
+    }
+}
 #[cfg(target_os = "macos")]
 pub use volume::{Custody, MacVolumeMount};
 

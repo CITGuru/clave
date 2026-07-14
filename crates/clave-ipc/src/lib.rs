@@ -4,7 +4,7 @@ use clave_core::{Action, AppId, LaunchSpec, LaunchableApp, Verdict};
 use clave_platform::WindowId;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 pub mod transport;
 
 pub const PROTO_VERSION: u16 = 4;

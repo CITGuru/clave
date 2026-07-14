@@ -3,21 +3,13 @@ use serde::Serialize;
 
 const MOUNT: &str = "/Volumes/ClaveDisk";
 
-#[cfg(unix)]
-fn socket_path() -> std::path::PathBuf {
-    if let Ok(p) = std::env::var("CLAVE_LAUNCHER_SOCK") {
-        return std::path::PathBuf::from(p);
-    }
-    let mut p = std::env::temp_dir();
-    p.push("clave-launcher.sock");
-    p
-}
-
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 async fn daemon() -> Option<clave_ipc::transport::LauncherClient> {
-    clave_ipc::transport::LauncherClient::connect(socket_path())
-        .await
-        .ok()
+    clave_ipc::transport::LauncherClient::connect(
+        clave_ipc::transport::default_launcher_endpoint(),
+    )
+    .await
+    .ok()
 }
 
 #[derive(Serialize)]
@@ -81,7 +73,7 @@ fn demo_policy() -> PolicyBundle {
 
 #[tauri::command]
 async fn list_apps() -> Vec<AppInfo> {
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     if let Some(mut client) = daemon().await {
         if let Ok(apps) = client.list_apps().await {
             return apps
@@ -98,7 +90,7 @@ async fn list_apps() -> Vec<AppInfo> {
 
 #[tauri::command]
 async fn launch_spec(app_id: String) -> Option<LaunchInfo> {
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     if let Some(mut client) = daemon().await {
         if let Ok(spec) = client.prepare_launch(AppId(app_id.clone())).await {
             return spec.map(to_launch_info);
@@ -109,7 +101,7 @@ async fn launch_spec(app_id: String) -> Option<LaunchInfo> {
 
 #[tauri::command]
 async fn launch_app(app_id: String) -> Result<u32, String> {
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     if let Some(mut client) = daemon().await {
         return match client.launch(AppId(app_id)).await {
             Ok(Some(pid)) => Ok(pid),
@@ -118,21 +110,21 @@ async fn launch_app(app_id: String) -> Result<u32, String> {
             Err(e) => Err(e.to_string()),
         };
     }
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     {
         let _ = app_id;
         Err("daemon not running".into())
     }
-    #[cfg(not(unix))]
+    #[cfg(not(any(unix, windows)))]
     {
         let _ = app_id;
-        Err("launch is only supported on unix".into())
+        Err("launch is not supported on this platform".into())
     }
 }
 
 #[tauri::command]
 async fn enforcement() -> Vec<CapStatus> {
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     if let Some(mut client) = daemon().await {
         if let Ok(caps) = client.enforcement().await {
             return caps

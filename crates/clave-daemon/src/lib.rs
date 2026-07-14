@@ -24,6 +24,9 @@ pub use enroll::{AcceptedEnrollment, DeviceEnrollment, DeviceVolumeKey, EnrollEr
 #[cfg(target_os = "macos")]
 pub mod mac_main;
 
+#[cfg(target_os = "windows")]
+pub mod win_main;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PolicyError {
     Rollback { current: u64, offered: u64 },
@@ -99,6 +102,12 @@ impl Daemon {
 
     pub fn policy_version(&self) -> u64 {
         self.policy.load().version
+    }
+
+    /// A cloned snapshot of the active policy bundle, for adapters that need to read it off the
+    /// daemon (e.g. the Windows split-tunnel deriving its blocked-destination set).
+    pub fn policy_snapshot(&self) -> Arc<PolicyBundle> {
+        self.policy.load_full()
     }
 
     pub fn on_zone_join(&self, id: ProcId, reason: JoinReason, now: UnixTime) {
@@ -199,6 +208,16 @@ impl Daemon {
             .ok_or(LaunchError::NotLaunchable)?;
         let launched = spawn_contained(&spec).map_err(LaunchError::Spawn)?;
         self.on_zone_join(launched.proc, JoinReason::Launcher, now);
+        // If the platform can contain a process tree (Windows Job Objects), place the launched
+        // app under the boundary so it — and any child it spawns — is held and killable as a unit.
+        if let Some(containment) = self.platform.containment() {
+            if let Err(e) = containment.contain(launched.pid) {
+                eprintln!(
+                    "clave-daemon: could not contain pid {} in the job object: {e:?}",
+                    launched.pid
+                );
+            }
+        }
         Ok(launched)
     }
 
