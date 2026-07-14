@@ -26,6 +26,18 @@ func clave_mac_authorize_clone(
     _ source: UnsafePointer<CChar>?,
     _ target: UnsafePointer<CChar>?
 ) -> Bool
+@_silgen_name("clave_mac_authorize_rename")
+func clave_mac_authorize_rename(
+    _ token: UnsafePointer<UInt32>?,
+    _ source: UnsafePointer<CChar>?,
+    _ target: UnsafePointer<CChar>?
+) -> Bool
+@_silgen_name("clave_mac_authorize_link")
+func clave_mac_authorize_link(
+    _ token: UnsafePointer<UInt32>?,
+    _ source: UnsafePointer<CChar>?,
+    _ target: UnsafePointer<CChar>?
+) -> Bool
 @_silgen_name("clave_mac_zone_leave")
 func clave_mac_zone_leave(_ token: UnsafePointer<UInt32>?)
 
@@ -117,6 +129,41 @@ func handle(_ client: OpaquePointer, _ msg: UnsafePointer<es_message_t>) {
         }
         es_respond_auth_result(client, msg, allow ? ES_AUTH_RESULT_ALLOW : ES_AUTH_RESULT_DENY, false)
 
+    case ES_EVENT_TYPE_AUTH_RENAME:
+        let token = m.process.pointee.audit_token
+        let source = esString(m.event.rename.source.pointee.path)
+        let target: String
+        if m.event.rename.destination_type == ES_DESTINATION_TYPE_EXISTING_FILE {
+            target = esString(m.event.rename.destination.existing_file.pointee.path)
+        } else {
+            let dir = esString(m.event.rename.destination.new_path.dir.pointee.path)
+            let name = esString(m.event.rename.destination.new_path.filename)
+            target = (dir as NSString).appendingPathComponent(name)
+        }
+        let allow = withTokenPointer(token) { tok in
+            source.withCString { srcC in
+                target.withCString { dstC in
+                    clave_mac_authorize_rename(tok, srcC, dstC)
+                }
+            }
+        }
+        es_respond_auth_result(client, msg, allow ? ES_AUTH_RESULT_ALLOW : ES_AUTH_RESULT_DENY, false)
+
+    case ES_EVENT_TYPE_AUTH_LINK:
+        let token = m.process.pointee.audit_token
+        let source = esString(m.event.link.source.pointee.path)
+        let dir = esString(m.event.link.target_dir.pointee.path)
+        let name = esString(m.event.link.target_filename)
+        let target = (dir as NSString).appendingPathComponent(name)
+        let allow = withTokenPointer(token) { tok in
+            source.withCString { srcC in
+                target.withCString { dstC in
+                    clave_mac_authorize_link(tok, srcC, dstC)
+                }
+            }
+        }
+        es_respond_auth_result(client, msg, allow ? ES_AUTH_RESULT_ALLOW : ES_AUTH_RESULT_DENY, false)
+
     case ES_EVENT_TYPE_NOTIFY_EXIT:
         let token = m.process.pointee.audit_token
         withTokenPointer(token) { clave_mac_zone_leave($0) }
@@ -185,6 +232,8 @@ func startClient() {
         ES_EVENT_TYPE_AUTH_EXEC,
         ES_EVENT_TYPE_AUTH_OPEN,
         ES_EVENT_TYPE_AUTH_CLONE,
+        ES_EVENT_TYPE_AUTH_RENAME,
+        ES_EVENT_TYPE_AUTH_LINK,
         ES_EVENT_TYPE_NOTIFY_EXIT,
     ]
     let sub = es_subscribe(client, &events, UInt32(events.count))
@@ -192,7 +241,7 @@ func startClient() {
         log.fault("es_subscribe failed")
         exit(1)
     }
-    log.notice("Clave ES client subscribed (AUTH_EXEC, AUTH_OPEN, AUTH_CLONE, NOTIFY_EXIT).")
+    log.notice("Clave ES client subscribed (AUTH_EXEC, AUTH_OPEN, AUTH_CLONE, AUTH_RENAME, AUTH_LINK, NOTIFY_EXIT).")
 }
 
 startClient()

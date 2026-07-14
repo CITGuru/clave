@@ -119,6 +119,11 @@ pub fn run_macos(profile: Profile) {
         gateway,
     ));
 
+    daemon.set_policy_observer(Box::new(move |bundle| {
+        let updated = bundle.clone();
+        std::thread::spawn(move || publish_es_policy(&updated, profile));
+    }));
+
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
@@ -259,7 +264,6 @@ pub fn register_policy_publisher(publisher: PolicyPublisher) {
 
 fn publish_es_policy(policy: &clave_core::PolicyBundle, profile: Profile) {
     let mount = mount_point(profile);
-    clave_mac::set_mount_prefix(&mount);
 
     let json = match serde_json::to_string_pretty(policy) {
         Ok(json) => json,

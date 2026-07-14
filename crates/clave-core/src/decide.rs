@@ -84,20 +84,12 @@ pub fn decide(act: &Action, zones: &ZoneRegistry, pol: &PolicyBundle, now: UnixT
             proc,
             inside_enclave,
             access,
-        } => {
-            let supervised = zones.is_supervised(proc);
-            match (inside_enclave, supervised) {
-                (true, false) => Verdict::deny(Reason::EnclaveIntrusion),
-                (true, true) => Verdict::allow(Reason::FileAccess),
-                (false, true)
-                    if matches!(access, Access::Write) && !pol.files.allow_save_outside_enclave =>
-                {
-                    Verdict::deny(Reason::FileWrite)
-                }
-                (false, true) => Verdict::allow(Reason::FileAccess),
-                (false, false) => Verdict::allow(Reason::NotSupervised),
-            }
-        }
+        } => decide_file_open(
+            zones.is_supervised(proc),
+            *inside_enclave,
+            *access,
+            pol.files.allow_save_outside_enclave,
+        ),
 
         Action::NetConnect { proc, host } => {
             if !zones.is_supervised(proc) {
@@ -126,6 +118,23 @@ pub fn decide(act: &Action, zones: &ZoneRegistry, pol: &PolicyBundle, now: UnixT
                 Verdict::of(pol.input.on_tap, Reason::InputTap)
             }
         }
+    }
+}
+
+pub fn decide_file_open(
+    supervised: bool,
+    inside_enclave: bool,
+    access: Access,
+    allow_save_outside_enclave: bool,
+) -> Verdict {
+    match (inside_enclave, supervised) {
+        (true, false) => Verdict::deny(Reason::EnclaveIntrusion),
+        (true, true) => Verdict::allow(Reason::FileAccess),
+        (false, true) if matches!(access, Access::Write) && !allow_save_outside_enclave => {
+            Verdict::deny(Reason::FileWrite)
+        }
+        (false, true) => Verdict::allow(Reason::FileAccess),
+        (false, false) => Verdict::allow(Reason::NotSupervised),
     }
 }
 
