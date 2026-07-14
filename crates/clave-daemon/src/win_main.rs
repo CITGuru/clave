@@ -347,11 +347,25 @@ fn demo_policy() -> clave_core::PolicyBundle {
                 &format!(r"{local_appdata}\Programs\Microsoft VS Code\Code.exe"),
             ),
             app(
+                "cursor-work",
+                "CN=Anysphere, Inc.",
+                "Cursor",
+                "Cursor",
+                &format!(r"{program_files}\cursor\Cursor.exe"),
+            ),
+            app(
                 "notepad-work",
                 "CN=Microsoft Windows",
                 "Microsoft Windows Operating System",
                 "Notepad",
                 r"C:\Windows\System32\notepad.exe",
+            ),
+            app(
+                "explorer-work",
+                "CN=Microsoft Windows",
+                "Microsoft Windows Operating System",
+                "File Explorer",
+                r"C:\Windows\explorer.exe",
             ),
         ],
     };
