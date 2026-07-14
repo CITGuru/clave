@@ -118,6 +118,33 @@ impl<I: IdentityProvider, S: Store> Gateway<I, S> {
         }
     }
 
+    pub async fn refresh_session(
+        &self,
+        session: &Session,
+        now: UnixTime,
+        ttl: u64,
+    ) -> Result<Session, GatewayError> {
+        let vu = self.idp.refresh_session(&session.refresh_token).await?;
+        let ws = self
+            .store
+            .workspace(vu.workspace)
+            .await?
+            .ok_or(GatewayError::NoSuchWorkspace)?;
+        let user = self.store.upsert_user(&vu.email, &vu.idp_user_id).await?;
+        let membership = self.store.membership(vu.workspace, user).await?;
+
+        match authorize_login(&vu.email, vu.method, &ws, membership.as_ref()) {
+            LoginDecision::Allow { role } => Ok(Session {
+                user,
+                workspace: vu.workspace,
+                role,
+                expires_at: now.saturating_add(ttl),
+                refresh_token: vu.refresh_token,
+            }),
+            LoginDecision::Deny(r) => Err(GatewayError::Unauthorized(r)),
+        }
+    }
+
     pub async fn authorize_request(
         &self,
         session: &Session,

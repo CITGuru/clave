@@ -75,7 +75,7 @@ receives a real signed policy, and reports audit back.
   `IdentityProvider` trait; `grep scim` is empty. Add `ScimEvent`/`MembershipDelta`, a webhook route,
   and the suspend/restore path. *Files:* `clave-gateway/src/{idp,http,workos}.rs`. Doc 15 §1, §6, §9 step 3.
 
-- [ ] **NG-9 — WorkOS session refresh + SSO-verified fidelity.** **S/M**
+- [x] **NG-9 — WorkOS session refresh + SSO-verified fidelity.** **S/M**
   `Session` stores `refresh_token` but nothing refreshes it — expiry just returns `SessionInvalid`.
   `map_method` hard-codes SSO `verified: true`, so an `SsoMode::Required` workspace can't tell genuine
   SSO apart. *Files:* `clave-gateway/src/{gateway,http,workos}.rs`. Doc 15 §4.1.

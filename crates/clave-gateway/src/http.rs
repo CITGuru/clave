@@ -480,8 +480,30 @@ async fn auth_me(State(st): State<AppState>, headers: HeaderMap) -> Response {
             role: ctx.role,
         })
         .into_response(),
+        Err(GatewayError::SessionInvalid) => refresh_and_reply(&st, &session).await,
         Err(e) => err_response(e),
     }
+}
+
+async fn refresh_and_reply(st: &AppState, session: &Session) -> Response {
+    let refreshed = match st
+        .gateway
+        .refresh_session(session, now(), SESSION_TTL_SECS)
+        .await
+    {
+        Ok(s) => s,
+        Err(e) => return err_response(e),
+    };
+    let cookie = match st.sealer.seal(&refreshed) {
+        Ok(c) => c,
+        Err(e) => return err_response(e),
+    };
+    let info = MeResponse {
+        user: refreshed.user.0,
+        workspace: refreshed.workspace.0,
+        role: refreshed.role,
+    };
+    with_cookie(Json(info).into_response(), &set_cookie(&cookie))
 }
 
 async fn logout() -> Response {
