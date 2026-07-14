@@ -8,7 +8,7 @@ use clave_core::{
     DnsDecision, ExecVerdict, JoinReason, LaunchSpec, LaunchableApp, PathClass, PolicyBundle,
     Reason, ResolvedLaunch, UnixTime, Verdict, ZoneRegistry,
 };
-use clave_ipc::{DaemonMsg, LauncherReply, LauncherRequest, ShimMsg};
+use clave_ipc::{DaemonMsg, LauncherReply, LauncherRequest, LauncherStatus, ShimMsg};
 use clave_net::{FlowDisposition, FlowId, Inbound, Outbound, SplitRouter, Tunnel};
 use clave_platform::{EnforcementReport, Platform, ProcId, Route, WindowId};
 use clave_proto::{
@@ -366,6 +366,23 @@ impl Daemon {
                     .map(|(cap, status)| (cap.to_string(), status.to_string()))
                     .collect(),
             },
+            LauncherRequest::Status => LauncherReply::Status {
+                status: self.launcher_status(),
+            },
+        }
+    }
+
+    pub fn launcher_status(&self) -> LauncherStatus {
+        let (tenant, gateway_high_water) = {
+            let gateway = self.gateway.lock().unwrap();
+            (gateway.tenant().0, gateway.high_water())
+        };
+        LauncherStatus {
+            tenant,
+            policy_version: self.policy_version(),
+            volume_unlocked: self.volume_is_unlocked(),
+            mount_point: self.platform.volume().mount_point(),
+            gateway_high_water,
         }
     }
 

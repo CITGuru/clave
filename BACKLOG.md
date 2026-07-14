@@ -90,7 +90,7 @@ receives a real signed policy, and reports audit back.
   `Observation`s, and merge of the candidate profile back into a `PolicyBundle`. Only the observation
   *source* (ES-notify / Nt-hooks) is OS-gated. *Files:* `clave-core/src/learn.rs`, `clave-cli`. Doc 03 §6.
 
-- [ ] **NG-11 — Launcher enrollment/status panel + `LauncherRequest::Status`.** **M**
+- [x] **NG-11 — Launcher enrollment/status panel + `LauncherRequest::Status`.** **M**
   The launcher surfaces per-capability enforcement only; Settings/Notifications/Help/Connectivity are
   `<Placeholder>`. Add a `Status` IPC request (daemon already has `policy_version()`,
   `volume_is_unlocked()`, `checkpoint()`) carrying enrolled device/tenant/policy-version/mount/last-sync,

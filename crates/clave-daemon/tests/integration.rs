@@ -132,6 +132,16 @@ fn offline_daemon() -> Arc<Daemon> {
 }
 
 #[test]
+fn launcher_status_reports_enrollment_and_volume_state() {
+    let daemon = offline_daemon();
+    let status = daemon.launcher_status();
+    assert_eq!(status.tenant, 1);
+    assert_eq!(status.policy_version, daemon.policy_version());
+    assert_eq!(status.gateway_high_water, 0);
+    assert_eq!(status.volume_unlocked, daemon.volume_is_unlocked());
+}
+
+#[test]
 fn work_window_is_tracked_by_clave_edge_and_screen_protected() {
     let (daemon, h, _audit) = make();
     daemon.on_work_window_created(WindowId(5));

@@ -27,6 +27,14 @@ import { launchApp } from "@/lib/launch";
 
 type AppInfo = { id: string; label: string };
 type CapStatus = { capability: string; status: string };
+type StatusInfo = {
+  connected: boolean;
+  tenant: number;
+  policy_version: number;
+  volume_unlocked: boolean;
+  mount_point: string | null;
+  gateway_high_water: number;
+};
 type Section =
   | "launch"
   | "apps"
@@ -190,6 +198,15 @@ function Placeholder({
   );
 }
 
+function StatusRow({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="flex items-center gap-3 px-4 py-3">
+      <span className="flex-1 text-[13px] text-zinc-700">{label}</span>
+      <span className="text-[12px] font-medium text-zinc-500">{value}</span>
+    </div>
+  );
+}
+
 function Grid({
   items,
   editing,
@@ -236,6 +253,7 @@ export function FullView({
 } = {}) {
   const [apps, setApps] = useState<AppInfo[]>([]);
   const [posture, setPosture] = useState<CapStatus[]>([]);
+  const [status, setStatus] = useState<StatusInfo | null>(null);
   const [query, setQuery] = useState("");
   const [section, setSection] = useState<Section>(initialSection);
   const [toast, setToast] = useState<string | null>(null);
@@ -248,6 +266,7 @@ export function FullView({
   useEffect(() => {
     invoke<AppInfo[]>("list_apps").then(setApps).catch(console.error);
     invoke<CapStatus[]>("enforcement").then(setPosture).catch(console.error);
+    invoke<StatusInfo>("status").then(setStatus).catch(console.error);
   }, []);
 
   const filtered = useMemo(
@@ -555,11 +574,37 @@ export function FullView({
             </div>
           )}
           {section === "settings" && (
-            <Placeholder
-              title="Settings"
-              icon={Settings}
-              text="Account, device, and policy settings."
-            />
+            <div>
+              <h1 className="text-[26px] font-semibold tracking-tight">Settings</h1>
+              <p className="mb-6 mt-3 text-[13px] text-zinc-500">
+                This device’s enrollment and Clave Disk status.
+              </p>
+              {status && !status.connected ? (
+                <div className="max-w-xl rounded-xl border border-zinc-200 px-4 py-6 text-center text-sm text-zinc-400">
+                  The Clave daemon is not running — showing no live status.
+                </div>
+              ) : (
+                <div className="max-w-xl divide-y divide-zinc-100 overflow-hidden rounded-xl border border-zinc-200">
+                  <StatusRow label="Tenant" value={status ? `#${status.tenant}` : "…"} />
+                  <StatusRow
+                    label="Policy version"
+                    value={status ? `v${status.policy_version}` : "…"}
+                  />
+                  <StatusRow
+                    label="Clave Disk"
+                    value={status ? (status.volume_unlocked ? "unlocked" : "locked") : "…"}
+                  />
+                  <StatusRow
+                    label="Mount point"
+                    value={status?.mount_point ?? "not mounted"}
+                  />
+                  <StatusRow
+                    label="Last gateway sync"
+                    value={status ? `#${status.gateway_high_water}` : "…"}
+                  />
+                </div>
+              )}
+            </div>
           )}
         </div>
 

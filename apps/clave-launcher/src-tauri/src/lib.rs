@@ -32,6 +32,16 @@ pub struct CapStatus {
     status: String,
 }
 
+#[derive(Serialize)]
+pub struct StatusInfo {
+    connected: bool,
+    tenant: u64,
+    policy_version: u64,
+    volume_unlocked: bool,
+    mount_point: Option<String>,
+    gateway_high_water: u64,
+}
+
 fn app(id: &str, signing: &str, name: &str, exec: &str) -> AppRule {
     AppRule::new(
         AppId(id.into()),
@@ -139,6 +149,31 @@ async fn enforcement() -> Vec<CapStatus> {
         .collect()
 }
 
+#[tauri::command]
+async fn status() -> StatusInfo {
+    #[cfg(any(unix, windows))]
+    if let Some(mut client) = daemon().await {
+        if let Ok(s) = client.status().await {
+            return StatusInfo {
+                connected: true,
+                tenant: s.tenant,
+                policy_version: s.policy_version,
+                volume_unlocked: s.volume_unlocked,
+                mount_point: s.mount_point,
+                gateway_high_water: s.gateway_high_water,
+            };
+        }
+    }
+    StatusInfo {
+        connected: false,
+        tenant: 0,
+        policy_version: 0,
+        volume_unlocked: false,
+        mount_point: None,
+        gateway_high_water: 0,
+    }
+}
+
 fn to_launch_info(s: clave_core::LaunchSpec) -> LaunchInfo {
     LaunchInfo {
         executable: s.executable,
@@ -207,7 +242,8 @@ pub fn run() {
             list_apps,
             launch_spec,
             launch_app,
-            enforcement
+            enforcement,
+            status
         ])
         .run(tauri::generate_context!())
         .expect("error while running the Clave app");

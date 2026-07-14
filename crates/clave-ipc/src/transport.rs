@@ -420,4 +420,13 @@ impl LauncherClient {
             None => Err(TransportError::Truncated),
         }
     }
+
+    pub async fn status(&mut self) -> Result<crate::LauncherStatus, TransportError> {
+        self.conn.write(&LauncherRequest::Status).await?;
+        match self.conn.read::<LauncherReply>().await? {
+            Some(LauncherReply::Status { status }) => Ok(status),
+            Some(_) => Err(TransportError::Handshake("expected Status")),
+            None => Err(TransportError::Truncated),
+        }
+    }
 }
