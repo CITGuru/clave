@@ -7,6 +7,7 @@
 //! without the SDK and the daemon degrades cleanly (staying on the loopback path) when the driver
 //! is absent or it is not running elevated.
 
+#[cfg(any(windows, test))]
 use std::net::{IpAddr, Ipv4Addr};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -16,12 +17,16 @@ pub enum NetVerdict {
 }
 
 /// Size of `WINDIVERT_ADDRESS` (v2.2): `INT64` timestamp + one packed `UINT32` of bitfields +
-/// `UINT32` reserved + a 64-byte union.
+/// `UINT32` reserved + a 64-byte union. Only the WinDivert driver and its cross-platform parse
+/// tests read this layer, so it is gated to avoid dead-code noise on a plain non-Windows build.
+#[cfg(any(windows, test))]
 pub const WINDIVERT_ADDRESS_LEN: usize = 80;
 
+#[cfg(any(windows, test))]
 const EVENT_SOCKET_CONNECT: u8 = 4;
 
 /// A decoded outbound-connect event from a `WINDIVERT_ADDRESS` at the socket layer.
+#[cfg(any(windows, test))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SocketEvent {
     pub event: u8,
@@ -32,6 +37,7 @@ pub struct SocketEvent {
     pub remote_port: u16,
 }
 
+#[cfg(any(windows, test))]
 impl SocketEvent {
     pub fn is_outbound_connect(&self) -> bool {
         self.event == EVENT_SOCKET_CONNECT && self.outbound
@@ -42,6 +48,7 @@ impl SocketEvent {
 /// `windivert.h` (`WINDIVERT_DATA_SOCKET` inside the address union) and the byte ordering the
 /// official `socketdump` sample uses: `RemoteAddr[0]` is a host-order `UINT32` and ports are
 /// network-order. Kept pure so the FFI struct layout is regression-tested without the driver.
+#[cfg(any(windows, test))]
 pub fn parse_socket_address(buf: &[u8]) -> Option<SocketEvent> {
     if buf.len() < WINDIVERT_ADDRESS_LEN {
         return None;

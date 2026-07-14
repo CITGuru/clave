@@ -4,6 +4,9 @@ pub extern "C" fn clave_daemon_run() {
     clave_daemon::mac_main::run_macos(clave_daemon::mac_main::Profile::SignedHost);
 }
 
+/// # Safety
+/// `pusher`, if `Some`, must be a valid C function pointer that accepts `(ptr, len)` describing
+/// `len` readable bytes and remains callable for the lifetime of the process.
 #[cfg(target_os = "macos")]
 #[no_mangle]
 pub unsafe extern "C" fn clave_daemon_set_policy_pusher(
