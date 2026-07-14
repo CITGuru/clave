@@ -13,8 +13,11 @@ clave-core = { path = "../clave-core" }
 clave-net = { path = "../clave-net" }
 clave-volume = { path = "../clave-volume" }
 
+# `system` compiles in the registry-based fallback that locates the installed `winfsp-x64.dll`
+# via WinFsp's `InstallDir`, so `winfsp_init` works without the DLL sitting on PATH.
 [target.'cfg(windows)'.dependencies.winfsp]
 version = "0.13"
+features = ["system"]
 
 [target.'cfg(windows)'.build-dependencies.winfsp]
 version = "0.13"
