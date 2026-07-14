@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 
 mod audit_ingest;
+mod cert;
 mod error;
 mod gateway;
 mod http;
@@ -20,6 +21,10 @@ mod device_link;
 
 #[cfg(feature = "device-link")]
 pub use device_link::serve_device_audit;
+
+pub use cert::{DeviceCertIssuer, IssuedTls};
+#[cfg(feature = "device-link")]
+pub use cert::DeviceCaIssuer;
 
 pub use audit_ingest::{
     AuditAlert, AuditLedger, AuditRecord, AuditStore, IngestError, MemAuditStore, PersistedChain,

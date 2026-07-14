@@ -15,8 +15,9 @@ postgres = ["dep:sqlx", "dep:uuid"]
 workos = ["dep:reqwest", "dep:jsonwebtoken"]
 # The runnable production binary: both adapters + a tokio runtime to serve the router.
 server = ["postgres", "workos", "dep:tokio", "device-link"]
-# The device audit link: pumps a mutual-TLS `DeviceLink`'s batches into the ledger.
-device-link = ["clave-proto/mtls"]
+# The device audit link + cert issuance: pumps a mutual-TLS `DeviceLink`'s batches into the
+# ledger, and mints CA-signed device certs at enrollment.
+device-link = ["clave-proto/ca"]
 
 [dependencies]
 clave-identity = { path = "../clave-identity" }

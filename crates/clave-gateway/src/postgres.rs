@@ -425,6 +425,38 @@ impl Store for PgStore {
         }
         Ok(())
     }
+
+    async fn set_device_fingerprint(
+        &self,
+        device: DeviceId,
+        fingerprint: [u8; 32],
+    ) -> Result<(), GatewayError> {
+        sqlx::query("UPDATE device SET cert_fingerprint = $2 WHERE id = $1")
+            .bind(uuid::Uuid::from_u128(device.0))
+            .bind(&fingerprint[..])
+            .execute(&self.pool)
+            .await
+            .map_err(store_err)?;
+        Ok(())
+    }
+
+    async fn device_by_fingerprint(
+        &self,
+        fingerprint: &[u8; 32],
+    ) -> Result<Option<DeviceId>, GatewayError> {
+        let row = sqlx::query("SELECT id FROM device WHERE cert_fingerprint = $1")
+            .bind(&fingerprint[..])
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(store_err)?;
+        match row {
+            None => Ok(None),
+            Some(r) => {
+                let id: uuid::Uuid = r.try_get("id").map_err(store_err)?;
+                Ok(Some(DeviceId(id.as_u128())))
+            }
+        }
+    }
 }
 
 pub struct PgAuditStore {

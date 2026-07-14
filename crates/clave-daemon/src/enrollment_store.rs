@@ -3,8 +3,8 @@ use std::sync::{Arc, Mutex};
 
 use clave_core::{PolicyBundle, UnixTime};
 use clave_proto::{
-    DeviceSigningKey, EnrollmentGrant, GatewayCommand, GatewaySigningKey, GatewayVerifier, TenantId,
-    WrappedVolumeKey,
+    DeviceSigningKey, EnrollmentGrant, GatewayCommand, GatewaySigningKey, GatewayVerifier,
+    TenantId, TlsCredentials, WrappedVolumeKey,
 };
 use clave_volume::{ContainerId, Dek, DeviceSealingKey, Kek, DEK_LEN};
 use serde::{Deserialize, Serialize};
@@ -25,6 +25,8 @@ pub struct EnrollmentRecord {
     pub volume_key: Option<WrappedVolumeKey>,
     pub device_signing_seed: [u8; 32],
     pub device_kek: Option<[u8; 32]>,
+    #[serde(default)]
+    pub tls: Option<TlsCredentials>,
 }
 
 impl EnrollmentRecord {
@@ -75,6 +77,7 @@ pub fn bootstrap_dev_enrollment(
         volume_key: Some(volume_key),
         device_signing_seed: DEV_DEVICE_SIGNING_SEED,
         device_kek: Some(DEV_DEVICE_KEK),
+        tls: None,
     }
 }
 

@@ -9,6 +9,15 @@ pub struct WrappedVolumeKey {
     pub ephemeral_pub: Option<[u8; 32]>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TlsCredentials {
+    pub ca_pem: Vec<u8>,
+    pub cert_pem: Vec<u8>,
+    pub key_pem: Vec<u8>,
+    pub server_name: String,
+    pub gateway_addr: String,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct EnrollmentGrant {
     pub policy: Option<SignedCommand>,

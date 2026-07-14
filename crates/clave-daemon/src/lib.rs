@@ -997,6 +997,35 @@ pub fn gateway_link_from_env(rt: &tokio::runtime::Runtime) -> Option<Box<dyn Gat
     }
 }
 
+#[cfg(feature = "gateway-mtls")]
+pub fn gateway_link_from_tls(
+    rt: &tokio::runtime::Runtime,
+    tls: &clave_proto::TlsCredentials,
+) -> Option<Box<dyn GatewayLink>> {
+    let identity = clave_proto::mtls::Identity::from_pem(&tls.cert_pem, &tls.key_pem).ok()?;
+    match rt.block_on(clave_proto::mtls::connect_gateway_link(
+        &tls.gateway_addr,
+        &tls.server_name,
+        &tls.ca_pem,
+        identity,
+    )) {
+        Ok(link) => {
+            println!(
+                "clave-daemon: gateway link up — {} over mTLS (enrolled cert)",
+                tls.gateway_addr
+            );
+            Some(Box::new(link))
+        }
+        Err(e) => {
+            eprintln!(
+                "clave-daemon: gateway mTLS connect to {} failed ({e})",
+                tls.gateway_addr
+            );
+            None
+        }
+    }
+}
+
 pub fn spawn_gateway_sync(
     daemon: Arc<Daemon>,
     link: Box<dyn GatewayLink>,

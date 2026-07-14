@@ -1,5 +1,5 @@
 use clave_core::UnixTime;
-use clave_proto::{EnrollmentGrant, SignedCommand, TenantId, WrappedVolumeKey};
+use clave_proto::{EnrollmentGrant, SignedCommand, TenantId, TlsCredentials, WrappedVolumeKey};
 use serde::Deserialize;
 
 use crate::enroll::{DeviceEnrollment, DeviceVolumeKey, EnrollError};
@@ -22,6 +22,7 @@ pub enum CompletionStatus {
     Approved {
         policy: Option<SignedCommand>,
         volume_key: Option<WrappedVolumeKey>,
+        tls: Option<Box<TlsCredentials>>,
     },
 }
 
@@ -111,8 +112,12 @@ impl<T: EnrollmentTransport> EnrollmentClient<T> {
             device_wrapping_key: Some(hex32(&cfg.device_wrapping_key)),
         })?;
 
-        let (policy, volume_key) = match completion {
-            CompletionStatus::Approved { policy, volume_key } => (policy, volume_key),
+        let (policy, volume_key, tls) = match completion {
+            CompletionStatus::Approved {
+                policy,
+                volume_key,
+                tls,
+            } => (policy, volume_key, tls),
             CompletionStatus::Pending => return Err(EnrollClientError::NotApproved),
         };
 
@@ -137,6 +142,7 @@ impl<T: EnrollmentTransport> EnrollmentClient<T> {
             volume_key,
             device_signing_seed: cfg.device_signing_seed,
             device_kek: Some(cfg.device_wrapping_key),
+            tls: tls.map(|b| *b),
         })
     }
 }
@@ -316,6 +322,8 @@ mod http {
             policy: Option<SignedCommand>,
             #[serde(default)]
             volume_key: Option<WrappedVolumeKey>,
+            #[serde(default)]
+            tls: Option<Box<TlsCredentials>>,
         },
     }
 
@@ -407,8 +415,16 @@ mod http {
             )?;
             Ok(match r {
                 CompletionResponse::Pending => CompletionStatus::Pending,
-                CompletionResponse::Approved { policy, volume_key } => {
-                    CompletionStatus::Approved { policy, volume_key }
+                CompletionResponse::Approved {
+                    policy,
+                    volume_key,
+                    tls,
+                } => {
+                    CompletionStatus::Approved {
+                        policy,
+                        volume_key,
+                        tls,
+                    }
                 }
             })
         }
@@ -481,6 +497,13 @@ mod tests {
                     wrapped_dek: wrapped.as_bytes().to_vec(),
                     ephemeral_pub: None,
                 }),
+                tls: Some(Box::new(TlsCredentials {
+                    ca_pem: b"ca".to_vec(),
+                    cert_pem: b"cert".to_vec(),
+                    key_pem: b"key".to_vec(),
+                    server_name: "gateway.test".to_string(),
+                    gateway_addr: "127.0.0.1:9443".to_string(),
+                })),
             })
         }
     }
@@ -513,6 +536,11 @@ mod tests {
         assert_eq!(record.policy.version, 5);
         assert_eq!(record.device_kek, Some(wrapping_key));
         assert_eq!(record.tenant, TENANT);
+        assert_eq!(
+            record.tls.as_ref().map(|t| t.server_name.as_str()),
+            Some("gateway.test"),
+            "the delivered TLS credentials are stored on the record"
+        );
         let (container, _dek) = record.open_volume(None, 1_000).expect("volume opens");
         assert_eq!(container, clave_volume::ContainerId(0xC1A5));
     }

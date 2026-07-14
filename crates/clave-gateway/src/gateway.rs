@@ -7,14 +7,14 @@ use clave_identity::{
     UserId, WorkspaceId,
 };
 use clave_core::PolicyBundle;
-use clave_proto::SignedCommand;
+use clave_proto::{SignedCommand, TlsCredentials};
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    AuditAlert, AuditLedger, AuditRecord, AuditStore, DenyReason, DeviceId, DeviceRecord,
-    DeviceStatus, GatewayError, IdentityProvider, IngestError, MemberRecord, MembershipDelta,
-    PolicyIssuer, RequestContext, ScimEvent, Session, SignedSpoolBatch, Store, VolumeKeyService,
-    WrappedVolumeKey,
+    AuditAlert, AuditLedger, AuditRecord, AuditStore, DenyReason, DeviceCertIssuer, DeviceId,
+    DeviceRecord, DeviceStatus, GatewayError, IdentityProvider, IngestError, MemberRecord,
+    MembershipDelta, PolicyIssuer, RequestContext, ScimEvent, Session, SignedSpoolBatch, Store,
+    VolumeKeyService, WrappedVolumeKey,
 };
 
 pub struct Gateway<I, S> {
@@ -24,6 +24,7 @@ pub struct Gateway<I, S> {
     volume_keys: Option<Arc<dyn VolumeKeyService>>,
     audit: Arc<AuditLedger>,
     audit_store: Option<Arc<dyn AuditStore>>,
+    device_ca: Option<Arc<dyn DeviceCertIssuer>>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -43,6 +44,8 @@ pub enum EnrollmentCompletion {
         role: Role,
         policy: Option<SignedCommand>,
         volume_key: Option<WrappedVolumeKey>,
+        #[serde(default)]
+        tls: Option<Box<TlsCredentials>>,
     },
 }
 
@@ -55,12 +58,25 @@ impl<I: IdentityProvider, S: Store> Gateway<I, S> {
             volume_keys: None,
             audit: Arc::new(AuditLedger::new()),
             audit_store: None,
+            device_ca: None,
         }
     }
 
     pub fn with_audit_store(mut self, store: Arc<dyn AuditStore>) -> Self {
         self.audit_store = Some(store);
         self
+    }
+
+    pub fn with_device_ca(mut self, issuer: Arc<dyn DeviceCertIssuer>) -> Self {
+        self.device_ca = Some(issuer);
+        self
+    }
+
+    pub async fn device_for_fingerprint(
+        &self,
+        fingerprint: &[u8; 32],
+    ) -> Result<Option<DeviceId>, GatewayError> {
+        self.store.device_by_fingerprint(fingerprint).await
     }
 
     pub async fn ingest_device_audit(
@@ -263,12 +279,34 @@ impl<I: IdentityProvider, S: Store> Gateway<I, S> {
                     }
                     _ => None,
                 };
+                let tls = match &self.device_ca {
+                    Some(issuer) => match issuer.issue(device.0) {
+                        Ok(issued) => {
+                            self.store
+                                .set_device_fingerprint(device, issued.fingerprint)
+                                .await?;
+                            Some(Box::new(TlsCredentials {
+                                ca_pem: issued.ca_pem,
+                                cert_pem: issued.cert_pem,
+                                key_pem: issued.key_pem,
+                                server_name: issuer.server_name().to_string(),
+                                gateway_addr: issuer.gateway_addr().to_string(),
+                            }))
+                        }
+                        Err(e) => {
+                            eprintln!("clave-gateway: device cert issue failed: {e}");
+                            None
+                        }
+                    },
+                    None => None,
+                };
                 Ok(EnrollmentCompletion::Approved {
                     device,
                     user,
                     role,
                     policy,
                     volume_key,
+                    tls,
                 })
             }
         }

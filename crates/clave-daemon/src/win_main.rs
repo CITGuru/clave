@@ -109,9 +109,10 @@ pub fn run_windows() {
         .build()
         .expect("tokio runtime");
 
+    let gw_tls = booted.record.lock().expect("record lock poisoned").tls.clone();
     spawn_gateway_sync(
         Arc::clone(&daemon),
-        select_gateway_link(&rt),
+        select_gateway_link(&rt, gw_tls.as_ref()),
         booted.device_signer,
         booted.checkpoint_store,
         GATEWAY_SYNC_INTERVAL,
@@ -271,12 +272,22 @@ fn state_dir() -> std::path::PathBuf {
         .join("Clave")
 }
 
-fn select_gateway_link(rt: &tokio::runtime::Runtime) -> Box<dyn clave_proto::GatewayLink> {
+fn select_gateway_link(
+    rt: &tokio::runtime::Runtime,
+    tls: Option<&clave_proto::TlsCredentials>,
+) -> Box<dyn clave_proto::GatewayLink> {
     #[cfg(feature = "gateway-mtls")]
-    if let Some(link) = crate::gateway_link_from_env(rt) {
-        return link;
+    {
+        if let Some(tls) = tls {
+            if let Some(link) = crate::gateway_link_from_tls(rt, tls) {
+                return link;
+            }
+        }
+        if let Some(link) = crate::gateway_link_from_env(rt) {
+            return link;
+        }
     }
-    let _ = rt;
+    let _ = (rt, tls);
     Box::new(LoopbackLink::new())
 }
 

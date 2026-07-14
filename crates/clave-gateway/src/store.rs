@@ -108,6 +108,17 @@ pub trait Store: Send + Sync {
         device: DeviceId,
         status: DeviceStatus,
     ) -> Result<(), GatewayError>;
+
+    async fn set_device_fingerprint(
+        &self,
+        device: DeviceId,
+        fingerprint: [u8; 32],
+    ) -> Result<(), GatewayError>;
+
+    async fn device_by_fingerprint(
+        &self,
+        fingerprint: &[u8; 32],
+    ) -> Result<Option<DeviceId>, GatewayError>;
 }
 
 struct StoredDevice {
@@ -144,6 +155,7 @@ struct Inner {
     invitations: HashMap<(WorkspaceId, String), Invitation>,
     devices_by_key: HashMap<(WorkspaceId, [u8; 32]), DeviceId>,
     devices: HashMap<DeviceId, StoredDevice>,
+    device_fingerprints: HashMap<[u8; 32], DeviceId>,
 }
 
 impl MemStore {
@@ -362,6 +374,32 @@ impl Store for MemStore {
             _ => Err(GatewayError::NotFound(format!("device {}", device.0))),
         }
     }
+
+    async fn set_device_fingerprint(
+        &self,
+        device: DeviceId,
+        fingerprint: [u8; 32],
+    ) -> Result<(), GatewayError> {
+        self.inner
+            .lock()
+            .unwrap()
+            .device_fingerprints
+            .insert(fingerprint, device);
+        Ok(())
+    }
+
+    async fn device_by_fingerprint(
+        &self,
+        fingerprint: &[u8; 32],
+    ) -> Result<Option<DeviceId>, GatewayError> {
+        Ok(self
+            .inner
+            .lock()
+            .unwrap()
+            .device_fingerprints
+            .get(fingerprint)
+            .copied())
+    }
 }
 
 #[async_trait]
@@ -445,5 +483,18 @@ impl<T: Store + ?Sized> Store for Arc<T> {
         status: DeviceStatus,
     ) -> Result<(), GatewayError> {
         (**self).set_device_status(workspace, device, status).await
+    }
+    async fn set_device_fingerprint(
+        &self,
+        device: DeviceId,
+        fingerprint: [u8; 32],
+    ) -> Result<(), GatewayError> {
+        (**self).set_device_fingerprint(device, fingerprint).await
+    }
+    async fn device_by_fingerprint(
+        &self,
+        fingerprint: &[u8; 32],
+    ) -> Result<Option<DeviceId>, GatewayError> {
+        (**self).device_by_fingerprint(fingerprint).await
     }
 }
