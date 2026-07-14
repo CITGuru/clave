@@ -53,7 +53,7 @@ receives a real signed policy, and reports audit back.
   service + HTTP surface do not (the router exposes only `/auth/*` and `/enroll/*`). Backend for NG-5.
   *Files:* `clave-gateway/src/{gateway,http,store,postgres}.rs`. Doc 15 §3, §7.
 
-- [ ] **NG-5 — Admin console web app (`apps/clave-console`).** **L** · *depends on NG-4*
+- [x] **NG-5 — Admin console web app (`apps/clave-console`).** **L** · *depends on NG-4*
   Does not exist. Login, members (invite/role/suspend), devices (list/lock/wipe), audit view.
   React/Vite/Shadcn/Tailwind per spec. *Files:* new `apps/clave-console`. Doc 15 §2, §9 step 4.
 
