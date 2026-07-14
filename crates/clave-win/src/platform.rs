@@ -59,10 +59,20 @@ impl ClipboardBroker for WinClipboard {
     }
 }
 
+/// Screen-capture exclusion. `protect_window` applies the real `WDA_EXCLUDEFROMCAPTURE` affinity,
+/// which the OS only honors for a window the calling process owns — so from the daemon this
+/// succeeds for its own windows and fails closed on a third-party work window. Cross-process
+/// delivery needs the in-process shim, which is why `Screen` stays `Unavailable` in the report.
 #[derive(Default)]
 pub struct WinScreen;
 
 impl ScreenGuard for WinScreen {
+    #[cfg(windows)]
+    fn protect_window(&self, w: WindowId) -> PResult<()> {
+        crate::exclude_from_capture(w.0 as isize)
+    }
+
+    #[cfg(not(windows))]
     fn protect_window(&self, _w: WindowId) -> PResult<()> {
         Ok(())
     }

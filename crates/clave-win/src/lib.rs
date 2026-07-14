@@ -20,6 +20,8 @@ mod input;
 #[cfg(windows)]
 mod job;
 #[cfg(windows)]
+mod screen;
+#[cfg(windows)]
 pub use clipboard::run_clipboard_guard;
 #[cfg(windows)]
 pub use divert::run_split_tunnel;
@@ -29,6 +31,8 @@ pub use edge::run_clave_edge;
 pub use input::run_input_guard;
 #[cfg(windows)]
 pub use job::ContainmentJob;
+#[cfg(windows)]
+pub use screen::exclude_from_capture;
 
 pub fn route(proc: &ProcId, zones: &ZoneRegistry, dst_blocked: bool) -> Route {
     clave_net::route(proc, zones, dst_blocked)
