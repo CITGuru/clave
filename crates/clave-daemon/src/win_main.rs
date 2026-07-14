@@ -32,6 +32,8 @@ pub fn run_windows() {
     platform.set_enforcement(Capability::Clipboard, EnforcementStatus::DevelopmentOnly);
     // The Clave Edge overlay draws work-window borders — a UI affordance, never a control.
     platform.set_enforcement(Capability::Overlay, EnforcementStatus::DevelopmentOnly);
+    // The input watch flags injected keystrokes over work windows — visibility, not a block.
+    platform.set_enforcement(Capability::Input, EnforcementStatus::DevelopmentOnly);
 
     // Job Object containment for launched work apps: `launch` assigns each app to the job, and a
     // supervisor thread reconciles the work zone with the job's live process tree.
@@ -95,6 +97,7 @@ pub fn run_windows() {
     }
     spawn_split_tunnel(Arc::clone(&daemon), Arc::clone(&zones));
     spawn_clave_edge(Arc::clone(&daemon), Arc::clone(&zones));
+    spawn_input_guard(Arc::clone(&daemon), Arc::clone(&zones));
 
     if let Err(e) = rt.block_on(serve_launcher_loop(daemon)) {
         // `first_pipe_instance(true)` (which stops a rogue process from pre-creating the pipe and
@@ -156,6 +159,25 @@ fn spawn_split_tunnel(daemon: Arc<Daemon>, zones: Arc<ZoneRegistry>) {
                 "clave-win: WinDivert split-tunnel inactive ({e}); network stays loopback \
                  development-only."
             );
+        }
+    });
+}
+
+/// Watches for injected keystrokes landing on a focused work window and audits each burst as an
+/// input tap over work. Visibility only — the hard block needs a signed keyboard filter driver.
+fn spawn_input_guard(daemon: Arc<Daemon>, zones: Arc<ZoneRegistry>) {
+    std::thread::spawn(move || {
+        let on_injected = move |_pid: u32| {
+            daemon.decide_action(
+                &clave_core::Action::InputTap {
+                    proc: None,
+                    exe: "injected".to_string(),
+                },
+                unix_now(),
+            );
+        };
+        if let Err(e) = clave_win::run_input_guard(zones, on_injected) {
+            eprintln!("clave-win: input watch unavailable ({e})");
         }
     });
 }

@@ -16,6 +16,8 @@ pub use platform::WindowsPlatform;
 #[cfg(windows)]
 mod edge;
 #[cfg(windows)]
+mod input;
+#[cfg(windows)]
 mod job;
 #[cfg(windows)]
 pub use clipboard::run_clipboard_guard;
@@ -23,6 +25,8 @@ pub use clipboard::run_clipboard_guard;
 pub use divert::run_split_tunnel;
 #[cfg(windows)]
 pub use edge::run_clave_edge;
+#[cfg(windows)]
+pub use input::run_input_guard;
 #[cfg(windows)]
 pub use job::ContainmentJob;
 
