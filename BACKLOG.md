@@ -113,7 +113,7 @@ receives a real signed policy, and reports audit back.
   dumps or exports the local hash-chained spool. No rate-limit/coalesce, so a denied-clipboard loop
   floods the chain. *Files:* `clave-core/src/audit.rs`, `clave-proto/src/audit.rs`, `clave-cli`. Doc 10 §6.
 
-- [ ] **NG-15 — CLI/dev policy authoring + validation subcommand.** **M**
+- [x] **NG-15 — CLI/dev policy authoring + validation subcommand.** **M**
   Every DLP knob serializes but there's no tool to compose/validate a `PolicyBundle` — the CLI only
   consumes a hand-written `policy.json`. (Production authoring belongs in the console, NG-6; this is the
   local/dev slice.) *Files:* `clave-cli`. Doc 05, doc 10 §1.
