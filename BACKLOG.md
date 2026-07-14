@@ -32,7 +32,7 @@ receives a real signed policy, and reports audit back.
   tested; only the TPM/SE unseal is OS-gated (a `Dev` path already exists).
   *Files:* `clave-daemon/src/{enroll.rs,lib.rs,mac_main.rs,win_main.rs}`.
 
-- [ ] **NG-2 — Device-side enrollment client (device-code flow).** **S/M** · *needs a store from NG-1*
+- [x] **NG-2 — Device-side enrollment client (device-code flow).** **S/M** · *needs a store from NG-1*
   Call `/enroll/start` → open the system browser → poll `/enroll/poll`/`/enroll/complete`. Only the
   cryptographic acceptance of the `EnrollmentGrant` exists today; the HTTP orchestration does not.
   *Files:* `clave-daemon/src/enroll.rs`. Doc 15 §5 (Flow B), §9 step 5.

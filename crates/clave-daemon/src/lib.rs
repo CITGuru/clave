@@ -27,6 +27,14 @@ pub use enrollment_store::{
     FileEnrollmentStore,
 };
 
+mod enroll_client;
+pub use enroll_client::{
+    open_url, run_enroll_cli, CompleteRequest, CompletionStatus, DeviceAuth, EnrollClientError,
+    EnrollmentClient, EnrollmentConfig, EnrollmentTransport, PollStatus,
+};
+#[cfg(feature = "enroll-http")]
+pub use enroll_client::HttpEnrollmentTransport;
+
 #[cfg(target_os = "macos")]
 pub mod mac_main;
 
