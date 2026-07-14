@@ -11,6 +11,9 @@ description = "Clave privileged service: hosts the policy brain and drives the p
 # The device-code enrollment client's HTTP transport (reqwest). Off by default so the portable
 # orchestration + tests build with no network stack.
 enroll-http = ["dep:reqwest"]
+# The real networked gateway link: TCP + mutual-TLS (clave-proto's `mtls`). Off by default so the
+# sync loop rides the in-process loopback link unless a gateway is configured.
+gateway-mtls = ["clave-proto/mtls"]
 
 [dependencies]
 clave-platform = { path = "../clave-platform" }

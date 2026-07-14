@@ -104,19 +104,19 @@ pub fn run_windows() {
         obs_store.save(&rec);
     }));
 
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .expect("tokio runtime");
+
     spawn_gateway_sync(
         Arc::clone(&daemon),
-        Box::new(LoopbackLink::new()),
+        select_gateway_link(&rt),
         booted.device_signer,
         booted.checkpoint_store,
         GATEWAY_SYNC_INTERVAL,
         unix_now,
     );
-
-    let rt = tokio::runtime::Builder::new_multi_thread()
-        .enable_all()
-        .build()
-        .expect("tokio runtime");
 
     spawn_clipboard_guard(Arc::clone(&daemon), Arc::clone(&zones));
     if let Some(containment) = containment {
@@ -269,6 +269,15 @@ fn state_dir() -> std::path::PathBuf {
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|_| std::env::temp_dir())
         .join("Clave")
+}
+
+fn select_gateway_link(rt: &tokio::runtime::Runtime) -> Box<dyn clave_proto::GatewayLink> {
+    #[cfg(feature = "gateway-mtls")]
+    if let Some(link) = crate::gateway_link_from_env(rt) {
+        return link;
+    }
+    let _ = rt;
+    Box::new(LoopbackLink::new())
 }
 
 fn demo_policy() -> clave_core::PolicyBundle {

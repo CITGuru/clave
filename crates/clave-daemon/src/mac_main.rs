@@ -149,19 +149,19 @@ pub fn run_macos(profile: Profile) {
         std::thread::spawn(move || publish_es_policy(&updated, profile));
     }));
 
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .expect("tokio runtime");
+
     spawn_gateway_sync(
         Arc::clone(&daemon),
-        Box::new(LoopbackLink::new()),
+        select_gateway_link(&rt),
         booted.device_signer,
         booted.checkpoint_store,
         GATEWAY_SYNC_INTERVAL,
         unix_now,
     );
-
-    let rt = tokio::runtime::Builder::new_multi_thread()
-        .enable_all()
-        .build()
-        .expect("tokio runtime");
 
     spawn_clipboard_guard(Arc::clone(&daemon), Arc::clone(&zones));
     spawn_screen_watch(Arc::clone(&daemon), Arc::clone(&zones));
@@ -185,6 +185,15 @@ pub fn run_macos(profile: Profile) {
     println!("  (set CLAVE_EDGE=0 to disable, CLAVE_EDGE_CAPTURE=1 to show it in screenshots)");
     let cfg_daemon = Arc::clone(&daemon);
     clave_mac::run_clave_edge(zones, overlay_tracked, move || cfg_daemon.overlay_cfg());
+}
+
+fn select_gateway_link(rt: &tokio::runtime::Runtime) -> Box<dyn clave_proto::GatewayLink> {
+    #[cfg(feature = "gateway-mtls")]
+    if let Some(link) = crate::gateway_link_from_env(rt) {
+        return link;
+    }
+    let _ = rt;
+    Box::new(LoopbackLink::new())
 }
 
 fn spawn_clipboard_guard(daemon: Arc<Daemon>, zones: Arc<ZoneRegistry>) {

@@ -37,7 +37,7 @@ receives a real signed policy, and reports audit back.
   cryptographic acceptance of the `EnrollmentGrant` exists today; the HTTP orchestration does not.
   *Files:* `clave-daemon/src/enroll.rs`. Doc 15 §5 (Flow B), §9 step 5.
 
-- [ ] **NG-3 — Real networked `GatewayLink` over mTLS.** **M**
+- [x] **NG-3 — Real networked `GatewayLink` over mTLS.** **M**
   Only `LoopbackLink` and in-memory `ChannelGatewayLink` exist; `clave-proto/src/mtls.rs` has the
   `client_config`/`server_config` building blocks but no networked transport rides them. This is the
   plumbing under NG-1 policy distribution and NG-7 audit drain. Doc 10 §2.

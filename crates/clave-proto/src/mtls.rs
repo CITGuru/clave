@@ -93,11 +93,30 @@ where
     TlsAcceptor::from(config).accept(io).await
 }
 
+pub async fn connect_gateway_link(
+    addr: &str,
+    server_name: &str,
+    ca_pem: &[u8],
+    identity: Identity,
+) -> io::Result<crate::transport::ChannelGatewayLink> {
+    let config = client_config(ca_pem, identity)?;
+    let tcp = tokio::net::TcpStream::connect(addr).await?;
+    let tls = connect(config, server_name, tcp).await?;
+    let (link, ends) = crate::transport::channel_link();
+    tokio::spawn(async move {
+        let _ = crate::transport::pump(tls, ends).await;
+    });
+    Ok(link)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::transport::{read_msg, write_msg};
-    use crate::{ControlReason, GatewayCommand, GatewaySigningKey, SignedCommand, TenantId};
+    use crate::{
+        ControlReason, DeviceSigningKey, GatewayCommand, GatewayLink, GatewaySigningKey,
+        SignedCommand, SignedSpoolBatch, TenantId, GENESIS,
+    };
 
     fn self_signed(name: &str) -> (Vec<u8>, Vec<u8>) {
         let key = rcgen::KeyPair::generate().unwrap();
@@ -140,6 +159,51 @@ mod tests {
         write_msg(&mut client, &cmd).await.unwrap();
         let got: Option<SignedCommand> = read_msg(&mut server).await.unwrap();
         assert_eq!(got, Some(cmd));
+    }
+
+    #[tokio::test]
+    async fn connect_gateway_link_round_trips_over_tcp_and_mtls() {
+        let (gw_cert, gw_key) = self_signed("gateway.test");
+        let (dev_cert, dev_key) = self_signed("device.test");
+        let server_cfg =
+            server_config(&dev_cert, Identity::from_pem(&gw_cert, &gw_key).unwrap()).unwrap();
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap().to_string();
+
+        let cmd = a_command();
+        let server_cmd = cmd.clone();
+        let server = tokio::spawn(async move {
+            let (tcp, _) = listener.accept().await.unwrap();
+            let mut tls = accept(server_cfg, tcp).await.unwrap();
+            write_msg(&mut tls, &server_cmd).await.unwrap();
+            let got: Option<SignedSpoolBatch> = read_msg(&mut tls).await.unwrap();
+            got
+        });
+
+        let mut link = connect_gateway_link(
+            &addr,
+            "gateway.test",
+            &gw_cert,
+            Identity::from_pem(&dev_cert, &dev_key).unwrap(),
+        )
+        .await
+        .unwrap();
+
+        let mut pulled = Vec::new();
+        for _ in 0..1000 {
+            pulled = link.poll_commands();
+            if !pulled.is_empty() {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+        assert_eq!(pulled, vec![cmd]);
+
+        let batch = DeviceSigningKey::from_seed([7u8; 32]).sign_batch(Vec::new(), GENESIS);
+        link.push_audit(batch.clone()).unwrap();
+
+        assert_eq!(server.await.unwrap(), Some(batch));
     }
 
     #[tokio::test]

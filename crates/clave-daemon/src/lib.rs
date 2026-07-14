@@ -887,6 +887,32 @@ impl GatewaySync {
     }
 }
 
+#[cfg(feature = "gateway-mtls")]
+pub fn gateway_link_from_env(rt: &tokio::runtime::Runtime) -> Option<Box<dyn GatewayLink>> {
+    let addr = std::env::var("CLAVE_GATEWAY_ADDR").ok()?;
+    let server_name =
+        std::env::var("CLAVE_GATEWAY_SERVER_NAME").unwrap_or_else(|_| "gateway".to_string());
+    let ca = std::fs::read(std::env::var("CLAVE_GATEWAY_CA").ok()?).ok()?;
+    let cert = std::fs::read(std::env::var("CLAVE_DEVICE_CERT").ok()?).ok()?;
+    let key = std::fs::read(std::env::var("CLAVE_DEVICE_KEY").ok()?).ok()?;
+    let identity = clave_proto::mtls::Identity::from_pem(&cert, &key).ok()?;
+    match rt.block_on(clave_proto::mtls::connect_gateway_link(
+        &addr,
+        &server_name,
+        &ca,
+        identity,
+    )) {
+        Ok(link) => {
+            println!("clave-daemon: gateway link up — {addr} over mTLS");
+            Some(Box::new(link))
+        }
+        Err(e) => {
+            eprintln!("clave-daemon: gateway mTLS connect to {addr} failed ({e}); using loopback");
+            None
+        }
+    }
+}
+
 pub fn spawn_gateway_sync(
     daemon: Arc<Daemon>,
     link: Box<dyn GatewayLink>,
