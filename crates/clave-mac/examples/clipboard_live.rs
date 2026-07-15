@@ -1,38 +1,44 @@
-use clave_core::{JoinReason, ZoneRegistry};
-use clave_platform::{Decision, ProcId, Zone};
-use std::process::Command;
-use std::sync::Arc;
-use std::time::Duration;
-
-const SETTLE: Duration = Duration::from_millis(700);
-const SECRET: &str = "quarterly-revenue-projection-CONFIDENTIAL";
-
-fn pbcopy(text: &str) {
-    let mut c = Command::new("pbcopy")
-        .stdin(std::process::Stdio::piped())
-        .spawn()
-        .expect("pbcopy");
-    use std::io::Write;
-    c.stdin
-        .take()
-        .expect("stdin")
-        .write_all(text.as_bytes())
-        .expect("write");
-    c.wait().expect("pbcopy");
-}
-
-fn pbpaste() -> String {
-    let out = Command::new("pbpaste").output().expect("pbpaste");
-    String::from_utf8_lossy(&out.stdout).into_owned()
-}
-
-fn proc_id(pid: u32) -> ProcId {
-    let mut token = [0u32; 8];
-    token[5] = pid;
-    ProcId::macos(token)
-}
-
+#[cfg(not(target_os = "macos"))]
 fn main() {
+    eprintln!("clipboard_live requires macOS");
+}
+
+#[cfg(target_os = "macos")]
+fn main() {
+    use clave_core::{JoinReason, ZoneRegistry};
+    use clave_platform::{Decision, ProcId, Zone};
+    use std::process::Command;
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    const SETTLE: Duration = Duration::from_millis(700);
+    const SECRET: &str = "quarterly-revenue-projection-CONFIDENTIAL";
+
+    fn pbcopy(text: &str) {
+        let mut c = Command::new("pbcopy")
+            .stdin(std::process::Stdio::piped())
+            .spawn()
+            .expect("pbcopy");
+        use std::io::Write;
+        c.stdin
+            .take()
+            .expect("stdin")
+            .write_all(text.as_bytes())
+            .expect("write");
+        c.wait().expect("pbcopy");
+    }
+
+    fn pbpaste() -> String {
+        let out = Command::new("pbpaste").output().expect("pbpaste");
+        String::from_utf8_lossy(&out.stdout).into_owned()
+    }
+
+    fn proc_id(pid: u32) -> ProcId {
+        let mut token = [0u32; 8];
+        token[5] = pid;
+        ProcId::macos(token)
+    }
+
     let Some(pid) = clave_mac::frontmost_app_pid() else {
         eprintln!("no frontmost app (run this with a GUI session)");
         std::process::exit(1);

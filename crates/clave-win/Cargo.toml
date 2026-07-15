@@ -5,19 +5,34 @@ edition = { workspace = true }
 license = { workspace = true }
 rust-version = { workspace = true }
 authors = { workspace = true }
-description = "Windows platform adapter for Clave (WFP split-tunnel, minifilter, shim) — scaffold."
+description = "Windows platform adapter for Clave: Job Object containment, clipboard DLP, WinDivert split-tunnel."
 
 [dependencies]
 clave-platform = { path = "../clave-platform" }
 clave-core = { path = "../clave-core" }
 clave-net = { path = "../clave-net" }
+clave-volume = { path = "../clave-volume" }
+
+# `system` compiles in the registry-based fallback that locates the installed `winfsp-x64.dll`
+# via WinFsp's `InstallDir`, so `winfsp_init` works without the DLL sitting on PATH.
+[target.'cfg(windows)'.dependencies.winfsp]
+version = "0.13"
+features = ["system"]
+
+[target.'cfg(windows)'.build-dependencies.winfsp]
+version = "0.13"
+features = ["delayload"]
 
 # Real Windows dependencies live here so non-Windows CI never fetches or compiles them.
-# Uncomment when implementing on a Windows checkout (doc 08 §2, doc 11 Appendix A):
 [target.'cfg(windows)'.dependencies]
-# windows = { version = "0.58", features = [
-#   "Win32_NetworkManagement_WindowsFilteringPlatform",
-#   "Win32_Foundation", "Win32_System_Threading",
-# ] }
-# wintun = "0.5"
-# windivert = "0.6"   # user-mode prototype before committing to a WFP callout driver
+windows = { version = "0.58", features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Gdi",
+    "Win32_Security",
+    "Win32_System_DataExchange",
+    "Win32_System_JobObjects",
+    "Win32_System_LibraryLoader",
+    "Win32_System_Ole",
+    "Win32_System_Threading",
+    "Win32_UI_WindowsAndMessaging",
+] }

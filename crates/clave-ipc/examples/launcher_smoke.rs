@@ -1,14 +1,21 @@
-use clave_core::AppId;
-use clave_ipc::transport::LauncherClient;
+#[cfg(not(any(unix, windows)))]
+fn main() {
+    eprintln!("launcher_smoke requires a Unix-domain socket or a Windows named pipe");
+}
 
+#[cfg(any(unix, windows))]
 #[tokio::main]
 async fn main() {
+    use clave_core::AppId;
+    use clave_ipc::transport::{default_launcher_endpoint, LauncherClient};
+
     let path = std::env::var("CLAVE_LAUNCHER_SOCK")
-        .unwrap_or_else(|_| format!("{}/clave-launcher.sock", std::env::temp_dir().display()));
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|_| default_launcher_endpoint());
 
     let mut client = LauncherClient::connect(&path)
         .await
-        .expect("connect to clave-daemon launcher socket");
+        .expect("connect to clave-daemon launcher endpoint");
 
     let apps = client.list_apps().await.expect("list apps");
     println!("catalog ({} apps):", apps.len());

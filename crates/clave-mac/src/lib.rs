@@ -1,6 +1,8 @@
 #![allow(unexpected_cfgs)]
 
-use clave_core::{classify_exec, AppPolicy, BinaryMatch, JoinReason, PolicyBundle, ZoneRegistry};
+use clave_core::{classify_exec, AppPolicy, BinaryMatch, JoinReason, ZoneRegistry};
+#[cfg(target_os = "macos")]
+use clave_core::PolicyBundle;
 use clave_platform::{ProcId, Route};
 use std::ffi::CStr;
 use std::os::raw::c_char;
@@ -56,6 +58,45 @@ mod se_seal;
 
 #[cfg(target_os = "macos")]
 mod volume;
+// Stub so `MacPlatform` (and the rest of this crate) still compiles on
+// Linux/Windows CI; the real `hdiutil` + Keychain + SE mount is macOS-only.
+#[cfg(not(target_os = "macos"))]
+mod volume {
+    use std::path::PathBuf;
+
+    use clave_platform::{PResult, VolumeMount};
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub enum Custody {
+        RequireHardware,
+        AllowPlainFallback,
+    }
+
+    #[derive(Default)]
+    pub struct MacVolumeMount;
+
+    impl MacVolumeMount {
+        pub fn new(
+            _container: u128,
+            _bundle_path: impl Into<PathBuf>,
+            _custody: Custody,
+        ) -> Self {
+            Self
+        }
+    }
+
+    impl VolumeMount for MacVolumeMount {
+        fn is_mounted(&self) -> bool {
+            false
+        }
+        fn mount_point(&self) -> Option<String> {
+            None
+        }
+        fn request_wipe(&self) -> PResult<()> {
+            Ok(())
+        }
+    }
+}
 #[cfg(target_os = "macos")]
 pub use volume::{Custody, MacVolumeMount};
 
@@ -103,6 +144,8 @@ unsafe fn read_token(token_ptr: *const u32) -> Option<[u32; 8]> {
     Some(t)
 }
 
+/// # Safety
+/// `token_ptr` must be null or point to 8 readable, aligned `u32`s (a macOS `audit_token_t`).
 #[no_mangle]
 pub unsafe extern "C" fn clave_mac_route_flow(token_ptr: *const u32, dst_blocked: bool) -> u8 {
     match unsafe { read_token(token_ptr) } {
@@ -111,6 +154,8 @@ pub unsafe extern "C" fn clave_mac_route_flow(token_ptr: *const u32, dst_blocked
     }
 }
 
+/// # Safety
+/// `ptr` must be null, or point to `len` readable bytes.
 #[no_mangle]
 pub unsafe extern "C" fn clave_mac_load_policy_json(ptr: *const u8, len: usize) -> bool {
     if ptr.is_null() {
@@ -132,6 +177,10 @@ pub unsafe extern "C" fn clave_mac_load_policy_json(ptr: *const u8, len: usize) 
     }
 }
 
+/// # Safety
+/// `parent_token` and `target_token` must each be null or point to 8 readable, aligned `u32`s
+/// (a macOS `audit_token_t`). `team_id` and `signing_id` must each be null or a NUL-terminated
+/// C string.
 #[no_mangle]
 pub unsafe extern "C" fn clave_mac_authorize_exec(
     parent_token: *const u32,
@@ -168,6 +217,8 @@ pub unsafe extern "C" fn clave_mac_authorize_exec(
     verdict.allow
 }
 
+/// # Safety
+/// `token_ptr` must be null or point to 8 readable, aligned `u32`s (a macOS `audit_token_t`).
 #[no_mangle]
 pub unsafe extern "C" fn clave_mac_zone_join(token_ptr: *const u32) {
     if let Some(t) = unsafe { read_token(token_ptr) } {
@@ -175,6 +226,8 @@ pub unsafe extern "C" fn clave_mac_zone_join(token_ptr: *const u32) {
     }
 }
 
+/// # Safety
+/// `token_ptr` must be null or point to 8 readable, aligned `u32`s (a macOS `audit_token_t`).
 #[no_mangle]
 pub unsafe extern "C" fn clave_mac_zone_leave(token_ptr: *const u32) {
     if let Some(t) = unsafe { read_token(token_ptr) } {
@@ -182,6 +235,8 @@ pub unsafe extern "C" fn clave_mac_zone_leave(token_ptr: *const u32) {
     }
 }
 
+/// # Safety
+/// `token_ptr` must be null or point to 8 readable, aligned `u32`s (a macOS `audit_token_t`).
 #[no_mangle]
 pub unsafe extern "C" fn clave_mac_can_access_volume(token_ptr: *const u32) -> bool {
     match unsafe { read_token(token_ptr) } {
@@ -190,6 +245,8 @@ pub unsafe extern "C" fn clave_mac_can_access_volume(token_ptr: *const u32) -> b
     }
 }
 
+/// # Safety
+/// `ptr` must be null or a NUL-terminated C string.
 #[cfg(target_os = "macos")]
 #[no_mangle]
 pub unsafe extern "C" fn clave_mac_set_mount_prefix(ptr: *const c_char) -> bool {
@@ -204,6 +261,9 @@ pub unsafe extern "C" fn clave_mac_set_mount_prefix(ptr: *const c_char) -> bool 
     true
 }
 
+/// # Safety
+/// `token_ptr` must be null or point to 8 readable, aligned `u32`s (a macOS `audit_token_t`).
+/// `path_ptr` must be null or a NUL-terminated C string.
 #[cfg(target_os = "macos")]
 #[no_mangle]
 pub unsafe extern "C" fn clave_mac_authorize_open(
@@ -224,6 +284,9 @@ pub unsafe extern "C" fn clave_mac_authorize_open(
     crate::es_gate::authorize_open(zones(), ProcId::macos(t), &path, write)
 }
 
+/// # Safety
+/// `token_ptr` must be null or point to 8 readable, aligned `u32`s (a macOS `audit_token_t`).
+/// `source_ptr` and `target_ptr` must each be null or a NUL-terminated C string.
 #[cfg(target_os = "macos")]
 #[no_mangle]
 pub unsafe extern "C" fn clave_mac_authorize_clone(

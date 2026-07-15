@@ -16,6 +16,15 @@ pub trait ProcessSupervisor: Send + Sync {
     fn supervised_count(&self) -> usize;
 }
 
+/// OS-level containment of a launched process and its descendants (Windows Job Objects, doc
+/// appendix A.1). `contain` places a process under the boundary; `contained_pids` reports the
+/// live members so the daemon can reconcile the work zone with the process tree the OS is
+/// actually holding — children a work app spawns join the zone without a separate exec hook.
+pub trait ProcessContainment: Send + Sync {
+    fn contain(&self, pid: u32) -> PResult<()>;
+    fn contained_pids(&self) -> Vec<u32>;
+}
+
 pub trait VolumeMount: Send + Sync {
     fn is_mounted(&self) -> bool;
     fn mount_point(&self) -> Option<String>;
@@ -53,6 +62,13 @@ pub trait Platform: Send + Sync + 'static {
     fn input(&self) -> &dyn InputGuard;
 
     fn enforcement(&self, cap: Capability) -> EnforcementStatus;
+
+    /// OS process containment for launched work apps, if this platform provides one.
+    /// `None` means the platform cannot contain a process tree (the daemon then relies only on
+    /// the pid it spawned joining the zone).
+    fn containment(&self) -> Option<&dyn ProcessContainment> {
+        None
+    }
 
     fn enforcement_report(&self) -> EnforcementReport {
         EnforcementReport::from_fn(|cap| self.enforcement(cap))

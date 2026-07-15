@@ -1,37 +1,43 @@
-use clave_core::{JoinReason, ZoneRegistry};
-use clave_mac::{CaptureWatch, Capturer};
-use clave_platform::ProcId;
-use std::process::Command;
-use std::sync::Arc;
-
-fn proc_id(pid: u32) -> ProcId {
-    let mut token = [0u32; 8];
-    token[5] = pid;
-    ProcId::macos(token)
-}
-
-fn screenshot_and_sample() -> Vec<Capturer> {
-    let out = std::env::temp_dir().join("clave-screen-live.png");
-    let mut child = Command::new("/usr/sbin/screencapture")
-        .arg("-x")
-        .arg(&out)
-        .spawn()
-        .expect("screencapture");
-
-    let mut seen = Vec::new();
-    for _ in 0..200 {
-        seen = clave_mac::running_capture_tools();
-        if !seen.is_empty() {
-            break;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(5));
-    }
-    let _ = child.wait();
-    let _ = std::fs::remove_file(&out);
-    seen
-}
-
+#[cfg(not(target_os = "macos"))]
 fn main() {
+    eprintln!("screen_live requires macOS");
+}
+
+#[cfg(target_os = "macos")]
+fn main() {
+    use clave_core::{JoinReason, ZoneRegistry};
+    use clave_mac::{CaptureWatch, Capturer};
+    use clave_platform::ProcId;
+    use std::process::Command;
+    use std::sync::Arc;
+
+    fn proc_id(pid: u32) -> ProcId {
+        let mut token = [0u32; 8];
+        token[5] = pid;
+        ProcId::macos(token)
+    }
+
+    fn screenshot_and_sample() -> Vec<Capturer> {
+        let out = std::env::temp_dir().join("clave-screen-live.png");
+        let mut child = Command::new("/usr/sbin/screencapture")
+            .arg("-x")
+            .arg(&out)
+            .spawn()
+            .expect("screencapture");
+
+        let mut seen = Vec::new();
+        for _ in 0..200 {
+            seen = clave_mac::running_capture_tools();
+            if !seen.is_empty() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        let _ = child.wait();
+        let _ = std::fs::remove_file(&out);
+        seen
+    }
+
     let zones = Arc::new(ZoneRegistry::new());
 
     let Some(front) = clave_mac::frontmost_app_pid() else {

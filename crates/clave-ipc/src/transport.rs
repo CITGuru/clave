@@ -6,7 +6,39 @@ use clave_core::{AppId, LaunchSpec, LaunchableApp};
 use serde::{de::DeserializeOwned, Serialize};
 use std::path::Path;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+#[cfg(unix)]
 use tokio::net::{UnixListener, UnixStream};
+#[cfg(windows)]
+use tokio::net::windows::named_pipe::{
+    ClientOptions, NamedPipeClient, NamedPipeServer, ServerOptions,
+};
+
+/// `ERROR_PIPE_BUSY` — all instances of a named pipe are currently in use.
+/// Hard-coded to keep `clave-ipc` free of a Windows crate dependency.
+#[cfg(windows)]
+const ERROR_PIPE_BUSY: i32 = 231;
+/// `ERROR_FILE_NOT_FOUND` — the server has not created the pipe instance yet.
+#[cfg(windows)]
+const ERROR_FILE_NOT_FOUND: i32 = 2;
+
+/// The default endpoint the launcher UI and the daemon rendezvous on: a Unix-domain
+/// socket path on macOS/Linux, a named pipe on Windows. `CLAVE_LAUNCHER_SOCK` overrides it.
+pub fn default_launcher_endpoint() -> std::path::PathBuf {
+    if let Ok(p) = std::env::var("CLAVE_LAUNCHER_SOCK") {
+        return std::path::PathBuf::from(p);
+    }
+    #[cfg(windows)]
+    {
+        std::path::PathBuf::from(r"\\.\pipe\clave-launcher")
+    }
+    #[cfg(not(windows))]
+    {
+        let mut p = std::env::temp_dir();
+        p.push("clave-launcher.sock");
+        p
+    }
+}
 
 #[derive(Debug)]
 pub enum TransportError {
@@ -51,37 +83,121 @@ pub trait PeerAuthenticator: Send + Sync {
     fn authenticate(&self, cred: &PeerCred, nonce: u64) -> bool;
 }
 
+/// The platform-specific byte stream underneath a [`Connection`]: a Unix-domain socket
+/// on macOS/Linux, a named-pipe end on Windows. All framing/handshake logic above is
+/// stream-agnostic and shared.
+enum Stream {
+    #[cfg(unix)]
+    Unix(UnixStream),
+    #[cfg(windows)]
+    PipeServer(NamedPipeServer),
+    #[cfg(windows)]
+    PipeClient(NamedPipeClient),
+}
+
+impl Stream {
+    async fn read_bytes(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        match self {
+            #[cfg(unix)]
+            Stream::Unix(s) => s.read(buf).await,
+            #[cfg(windows)]
+            Stream::PipeServer(s) => s.read(buf).await,
+            #[cfg(windows)]
+            Stream::PipeClient(s) => s.read(buf).await,
+        }
+    }
+
+    async fn write_all_bytes(&mut self, bytes: &[u8]) -> std::io::Result<()> {
+        match self {
+            #[cfg(unix)]
+            Stream::Unix(s) => s.write_all(bytes).await,
+            #[cfg(windows)]
+            Stream::PipeServer(s) => s.write_all(bytes).await,
+            #[cfg(windows)]
+            Stream::PipeClient(s) => s.write_all(bytes).await,
+        }
+    }
+
+    async fn flush(&mut self) -> std::io::Result<()> {
+        match self {
+            #[cfg(unix)]
+            Stream::Unix(s) => s.flush().await,
+            #[cfg(windows)]
+            Stream::PipeServer(s) => s.flush().await,
+            #[cfg(windows)]
+            Stream::PipeClient(s) => s.flush().await,
+        }
+    }
+}
+
 pub struct Connection {
-    stream: UnixStream,
+    stream: Stream,
     buf: Vec<u8>,
 }
 
 impl Connection {
     pub async fn connect(path: impl AsRef<Path>) -> Result<Self, TransportError> {
-        Ok(Self {
-            stream: UnixStream::connect(path).await?,
-            buf: Vec::new(),
-        })
-    }
-
-    fn from_stream(stream: UnixStream) -> Self {
-        Self {
-            stream,
-            buf: Vec::new(),
+        #[cfg(unix)]
+        {
+            Ok(Self {
+                stream: Stream::Unix(UnixStream::connect(path).await?),
+                buf: Vec::new(),
+            })
+        }
+        #[cfg(windows)]
+        {
+            let addr = path.as_ref().as_os_str().to_os_string();
+            // A named-pipe client can race the server: it may not have created the next
+            // free instance yet (`ERROR_FILE_NOT_FOUND`) or all instances may be busy
+            // (`ERROR_PIPE_BUSY`). Retry briefly before giving up.
+            for _ in 0..50 {
+                match ClientOptions::new().open(&addr) {
+                    Ok(client) => {
+                        return Ok(Self {
+                            stream: Stream::PipeClient(client),
+                            buf: Vec::new(),
+                        })
+                    }
+                    Err(e)
+                        if matches!(
+                            e.raw_os_error(),
+                            Some(ERROR_PIPE_BUSY) | Some(ERROR_FILE_NOT_FOUND)
+                        ) =>
+                    {
+                        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                    }
+                    Err(e) => return Err(e.into()),
+                }
+            }
+            Err(TransportError::Io(std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                "named pipe was busy or absent after retrying",
+            )))
         }
     }
 
+    /// The peer's OS credentials. On Windows this is a best-effort placeholder until the
+    /// signed IPC path (`GetNamedPipeClientProcessId` + `WinVerifyTrust`, doc appendix A.9)
+    /// lands with the driver work; on Unix it is `SO_PEERCRED`.
     pub fn peer_cred(&self) -> Result<PeerCred, TransportError> {
-        let c = self.stream.peer_cred()?;
-        Ok(PeerCred {
-            uid: c.uid(),
-            pid: c.pid(),
-        })
+        #[cfg(unix)]
+        {
+            let Stream::Unix(s) = &self.stream;
+            let c = s.peer_cred()?;
+            Ok(PeerCred {
+                uid: c.uid(),
+                pid: c.pid(),
+            })
+        }
+        #[cfg(windows)]
+        {
+            Ok(PeerCred { uid: 0, pid: None })
+        }
     }
 
     pub async fn write<T: Serialize>(&mut self, msg: &T) -> Result<(), TransportError> {
         let bytes = encode(msg);
-        self.stream.write_all(&bytes).await?;
+        self.stream.write_all_bytes(&bytes).await?;
         self.stream.flush().await?;
         Ok(())
     }
@@ -93,7 +209,7 @@ impl Connection {
                 return Ok(Some(msg));
             }
             let mut chunk = [0u8; 4096];
-            let n = self.stream.read(&mut chunk).await?;
+            let n = self.stream.read_bytes(&mut chunk).await?;
             if n == 0 {
                 return if self.buf.is_empty() {
                     Ok(None)
@@ -106,10 +222,12 @@ impl Connection {
     }
 }
 
+#[cfg(unix)]
 pub struct IpcServer {
     listener: UnixListener,
 }
 
+#[cfg(unix)]
 impl IpcServer {
     pub fn bind(path: impl AsRef<Path>) -> Result<Self, TransportError> {
         let _ = std::fs::remove_file(path.as_ref());
@@ -120,7 +238,50 @@ impl IpcServer {
 
     pub async fn accept(&self) -> Result<Connection, TransportError> {
         let (stream, _addr) = self.listener.accept().await?;
-        Ok(Connection::from_stream(stream))
+        Ok(Connection {
+            stream: Stream::Unix(stream),
+            buf: Vec::new(),
+        })
+    }
+}
+
+/// A named-pipe server. Windows named pipes serve one client per instance, so `accept`
+/// hands off the connected instance and immediately creates the next free instance to
+/// listen on — the standard tokio pattern.
+#[cfg(windows)]
+pub struct IpcServer {
+    addr: std::ffi::OsString,
+    next: std::sync::Mutex<Option<NamedPipeServer>>,
+}
+
+#[cfg(windows)]
+impl IpcServer {
+    pub fn bind(path: impl AsRef<Path>) -> Result<Self, TransportError> {
+        let addr = path.as_ref().as_os_str().to_os_string();
+        let server = ServerOptions::new()
+            .first_pipe_instance(true)
+            .create(&addr)?;
+        Ok(Self {
+            addr,
+            next: std::sync::Mutex::new(Some(server)),
+        })
+    }
+
+    pub async fn accept(&self) -> Result<Connection, TransportError> {
+        let server = self
+            .next
+            .lock()
+            .expect("pipe server lock poisoned")
+            .take()
+            .expect("a pipe instance is always staged");
+        server.connect().await?;
+        // Stage the next instance so a subsequent client can connect while this one is served.
+        let next = ServerOptions::new().create(&self.addr)?;
+        *self.next.lock().expect("pipe server lock poisoned") = Some(next);
+        Ok(Connection {
+            stream: Stream::PipeServer(server),
+            buf: Vec::new(),
+        })
     }
 }
 
