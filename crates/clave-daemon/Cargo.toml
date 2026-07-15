@@ -36,6 +36,12 @@ serde_json = "1"
 [target.'cfg(target_os = "windows")'.dependencies]
 clave-win = { path = "../clave-win" }
 
+# The Clave Disk links WinFsp with delay loading; the `/DELAYLOAD` flag must be emitted by the
+# build script of the crate that produces the binary, so it lives here rather than in clave-win.
+[target.'cfg(windows)'.build-dependencies.winfsp]
+version = "0.13"
+features = ["delayload"]
+
 [dev-dependencies]
 clave-testkit = { path = "../clave-testkit" }
 clave-proto = { path = "../clave-proto" }

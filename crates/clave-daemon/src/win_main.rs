@@ -18,9 +18,13 @@ const SUPERVISE_INTERVAL: Duration = Duration::from_millis(500);
 const GATEWAY_SYNC_INTERVAL: Duration = Duration::from_secs(30);
 const VOLUME_KEYSTORE_KEK: [u8; 32] = [0x4B; 32];
 
-/// The Clave Disk mount point on Windows. Until the WinFsp mount lands this is only used to
-/// resolve each app's contained launch spec (redirected HOME/temp), not a live volume.
+/// The Clave Disk mount point on Windows: the drive letter the encrypting WinFsp volume mounts at
+/// and the redirected HOME/temp each contained launch spec resolves against.
 const MOUNT_POINT: &str = "X:";
+
+/// Size the Clave Disk reports to the OS. It is an in-memory encrypting volume, so this is a
+/// ceiling on live work data rather than a reservation.
+const DISK_CAPACITY: u64 = 256 * 1024 * 1024;
 
 const CONTAINER_ID: u128 = 0xC1A5_0057;
 
@@ -37,6 +41,19 @@ pub fn run_windows() {
     platform.set_enforcement(Capability::Overlay, EnforcementStatus::DevelopmentOnly);
     // The input watch flags injected keystrokes over work windows — visibility, not a block.
     platform.set_enforcement(Capability::Input, EnforcementStatus::DevelopmentOnly);
+
+    // Mount the encrypting Clave Disk. File bytes live only as XTS-AES ciphertext (the same cipher
+    // the sealed block device uses); custody is software-only on this lab build, so the posture is
+    // development-only when the mount comes up, and stays unavailable if WinFsp cannot mount.
+    match clave_win::spawn_clave_disk(MOUNT_POINT.to_string(), Dek::from_bytes([0xDE; 64]), DISK_CAPACITY)
+        .recv_timeout(Duration::from_secs(10))
+    {
+        Ok(Ok(())) => {
+            platform.set_enforcement(Capability::Volume, EnforcementStatus::DevelopmentOnly);
+        }
+        Ok(Err(e)) => eprintln!("clave-win: Clave Disk unavailable ({e}); {MOUNT_POINT} not mounted"),
+        Err(_) => eprintln!("clave-win: Clave Disk mount timed out; {MOUNT_POINT} not mounted"),
+    }
 
     // Job Object containment for launched work apps: `launch` assigns each app to the job, and a
     // supervisor thread reconciles the work zone with the job's live process tree.
@@ -387,11 +404,25 @@ fn demo_policy() -> clave_core::PolicyBundle {
                 &format!(r"{local_appdata}\Programs\Microsoft VS Code\Code.exe"),
             ),
             app(
+                "cursor-work",
+                "CN=Anysphere, Inc.",
+                "Cursor",
+                "Cursor",
+                &format!(r"{program_files}\cursor\Cursor.exe"),
+            ),
+            app(
                 "notepad-work",
                 "CN=Microsoft Windows",
                 "Microsoft Windows Operating System",
                 "Notepad",
                 r"C:\Windows\System32\notepad.exe",
+            ),
+            app(
+                "explorer-work",
+                "CN=Microsoft Windows",
+                "Microsoft Windows Operating System",
+                "File Explorer",
+                r"C:\Windows\explorer.exe",
             ),
         ],
     };

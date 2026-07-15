@@ -20,6 +20,8 @@ mod input;
 #[cfg(windows)]
 mod job;
 #[cfg(windows)]
+mod mount;
+#[cfg(windows)]
 mod screen;
 #[cfg(windows)]
 pub use clipboard::run_clipboard_guard;
@@ -31,6 +33,8 @@ pub use edge::run_clave_edge;
 pub use input::run_input_guard;
 #[cfg(windows)]
 pub use job::ContainmentJob;
+#[cfg(windows)]
+pub use mount::spawn_clave_disk;
 #[cfg(windows)]
 pub use screen::exclude_from_capture;
 
