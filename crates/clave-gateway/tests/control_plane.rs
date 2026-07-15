@@ -247,6 +247,7 @@ async fn completing_enrollment_registers_the_device_and_is_idempotent() {
             role,
             policy,
             volume_key,
+            tls: _,
         } => {
             assert_eq!(user, UserId(1));
             assert_eq!(role, Role::Member);
@@ -272,6 +273,7 @@ async fn completing_enrollment_registers_the_device_and_is_idempotent() {
             role: Role::Member,
             policy: None,
             volume_key: None,
+            tls: None,
         }
     );
 

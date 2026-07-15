@@ -1,13 +1,17 @@
 use std::sync::{Arc, Mutex, OnceLock};
+use std::time::Duration;
 
 use clave_core::ZoneRegistry;
 use clave_mac::Custody;
 use clave_net::LoopbackTunnel;
 use clave_platform::{Platform, VolumeMount};
-use clave_proto::{AuditSpool, GatewaySigningKey, GatewayVerifier, TenantId};
-use clave_volume::{ClaveVolume, ContainerId, ContainerMeta, Dek, Kek, MemBacking, MemKeyStore};
+use clave_proto::{AuditSpool, LoopbackLink};
+use clave_volume::{ClaveVolume, ContainerMeta, Kek, MemBacking, MemKeyStore};
 
-use crate::Daemon;
+use crate::{boot_enrollment, spawn_gateway_sync, Daemon, EnrollmentStore};
+
+const GATEWAY_SYNC_INTERVAL: Duration = Duration::from_secs(30);
+const VOLUME_KEYSTORE_KEK: [u8; 32] = [0x4B; 32];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Profile {
@@ -34,6 +38,13 @@ impl Profile {
         match self {
             Profile::Dev => "ClaveDisk-dev.sparsebundle",
             Profile::SignedHost => "ClaveDisk.sparsebundle",
+        }
+    }
+
+    fn tag(self) -> &'static str {
+        match self {
+            Profile::Dev => "dev",
+            Profile::SignedHost => "signed",
         }
     }
 
@@ -87,26 +98,33 @@ pub fn run_macos(profile: Profile) {
         );
     }
 
-    let container = ContainerId(container_id);
+    let now = unix_now();
+    let booted = boot_enrollment(state_dir(), profile.tag(), container_id, demo_policy, now);
+    if booted.bootstrapped {
+        println!("clave-daemon: no enrollment on disk — bootstrapped a dev enrollment");
+    }
+    println!(
+        "clave-daemon: enrolled tenant {:?}, policy v{}",
+        booted.record.lock().expect("record lock poisoned").tenant,
+        booted.policy.version
+    );
+
     let keystore = Arc::new(MemKeyStore::new());
     keystore.provision(
-        container,
-        Kek::from_bytes([0x4B; 32]),
-        &Dek::from_bytes([0xDE; 64]),
+        booted.container,
+        Kek::from_bytes(VOLUME_KEYSTORE_KEK),
+        &booted.dek,
     );
     let volume = ClaveVolume::new(
-        ContainerMeta::new(container),
+        ContainerMeta::new(booted.container),
         keystore,
         Arc::new(MemBacking::zeroed(64)),
         zones.clone(),
     );
 
-    let signer = GatewaySigningKey::from_seed(TenantId(1), [0x6A; 32]);
-    let gateway = GatewayVerifier::new(TenantId(1), signer.public_key()).expect("valid pinned key");
-
     let overlay_tracked = platform.overlay_tracked();
 
-    let policy = demo_policy();
+    let policy = booted.policy.clone();
     publish_es_policy(&policy, profile);
 
     let daemon = Arc::new(Daemon::new(
@@ -116,10 +134,17 @@ pub fn run_macos(profile: Profile) {
         policy,
         Box::new(LoopbackTunnel::new(0x5A)),
         Arc::new(Mutex::new(volume)),
-        gateway,
+        booted.gateway,
     ));
 
+    let obs_store = Arc::clone(&booted.store);
+    let obs_record = Arc::clone(&booted.record);
     daemon.set_policy_observer(Box::new(move |bundle| {
+        {
+            let mut rec = obs_record.lock().expect("record lock poisoned");
+            rec.policy = bundle.clone();
+            obs_store.save(&rec);
+        }
         let updated = bundle.clone();
         std::thread::spawn(move || publish_es_policy(&updated, profile));
     }));
@@ -128,6 +153,16 @@ pub fn run_macos(profile: Profile) {
         .enable_all()
         .build()
         .expect("tokio runtime");
+
+    let gw_tls = booted.record.lock().expect("record lock poisoned").tls.clone();
+    spawn_gateway_sync(
+        Arc::clone(&daemon),
+        select_gateway_link(&rt, gw_tls.as_ref()),
+        booted.device_signer,
+        booted.checkpoint_store,
+        GATEWAY_SYNC_INTERVAL,
+        unix_now,
+    );
 
     spawn_clipboard_guard(Arc::clone(&daemon), Arc::clone(&zones));
     spawn_screen_watch(Arc::clone(&daemon), Arc::clone(&zones));
@@ -151,6 +186,25 @@ pub fn run_macos(profile: Profile) {
     println!("  (set CLAVE_EDGE=0 to disable, CLAVE_EDGE_CAPTURE=1 to show it in screenshots)");
     let cfg_daemon = Arc::clone(&daemon);
     clave_mac::run_clave_edge(zones, overlay_tracked, move || cfg_daemon.overlay_cfg());
+}
+
+fn select_gateway_link(
+    rt: &tokio::runtime::Runtime,
+    tls: Option<&clave_proto::TlsCredentials>,
+) -> Box<dyn clave_proto::GatewayLink> {
+    #[cfg(feature = "gateway-mtls")]
+    {
+        if let Some(tls) = tls {
+            if let Some(link) = crate::gateway_link_from_tls(rt, tls) {
+                return link;
+            }
+        }
+        if let Some(link) = crate::gateway_link_from_env(rt) {
+            return link;
+        }
+    }
+    let _ = (rt, tls);
+    Box::new(LoopbackLink::new())
 }
 
 fn spawn_clipboard_guard(daemon: Arc<Daemon>, zones: Arc<ZoneRegistry>) {
@@ -312,11 +366,20 @@ fn disk_bundle_path(profile: Profile) -> std::path::PathBuf {
     if let Ok(p) = std::env::var("CLAVE_DISK_BUNDLE") {
         return std::path::PathBuf::from(p);
     }
+    clave_support_dir().join(profile.bundle_name())
+}
+
+fn clave_support_dir() -> std::path::PathBuf {
     std::env::var("HOME")
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|_| std::env::temp_dir())
         .join("Library/Application Support/Clave")
-        .join(profile.bundle_name())
+}
+
+fn state_dir() -> std::path::PathBuf {
+    std::env::var("CLAVE_STATE_DIR")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|_| clave_support_dir())
 }
 
 fn demo_policy() -> clave_core::PolicyBundle {

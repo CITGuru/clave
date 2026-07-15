@@ -2,7 +2,8 @@ use std::sync::{Arc, Mutex};
 
 use clave_core::{
     Action, AppId, AppRule, AuditAction, BinaryMatch, DnsDecision, DnsSteering, ForwardMode,
-    JoinReason, LaunchProfile, NetworkProvider, OverlayPolicy, PathClass, PolicyBundle,
+    JoinReason, LaunchProfile, NetworkProvider, OverlayPolicy, PathClass, PolicyBundle, WebAppRule,
+    WebPolicy,
 };
 use clave_daemon::{
     Checkpoint, CheckpointStore, Daemon, DaemonEvent, FileCheckpointStore, GatewayError,
@@ -129,6 +130,78 @@ fn offline_daemon() -> Arc<Daemon> {
         Arc::new(Mutex::new(volume)),
         gateway,
     ))
+}
+
+#[test]
+fn repeated_denials_are_coalesced_in_the_audit_chain() {
+    let (daemon, _h, _audit) = make();
+    let leak = Action::ClipboardTransfer {
+        src: Zone::Work,
+        dst: Zone::Personal,
+        fmt: ClipFormat::Files,
+    };
+
+    for _ in 0..50 {
+        assert_eq!(daemon.decide_action(&leak, 1_000).decision, Decision::Deny);
+    }
+    assert_eq!(
+        daemon.peek_audit().0.len(),
+        1,
+        "a tight denial loop within the window audits once"
+    );
+
+    daemon.decide_action(&leak, 1_005);
+    assert_eq!(
+        daemon.peek_audit().0.len(),
+        2,
+        "a denial after the coalesce window is audited afresh"
+    );
+}
+
+#[test]
+fn web_apps_resolve_to_a_contained_browser_window() {
+    let (daemon, _h, _audit) = make();
+    let mut pol = PolicyBundle::restrictive_default();
+    pol.version = 1;
+    pol.web = WebPolicy {
+        browser: "/Applications/Google Chrome.app".into(),
+        apps: vec![WebAppRule::new("jira-work", "https://jira.corp").with_display_name("Jira")],
+    };
+    daemon.update_policy(pol).unwrap();
+
+    let apps = daemon.web_apps();
+    assert_eq!(apps.len(), 1);
+    assert_eq!(apps[0].label, "Jira");
+    assert_eq!(apps[0].url, "https://jira.corp");
+
+    let spec = daemon
+        .prepare_web_launch(&AppId("jira-work".into()))
+        .expect("resolves to a launch spec");
+    assert_eq!(spec.executable, "/Applications/Google Chrome.app");
+    assert!(spec.args.iter().any(|a| a == "--app=https://jira.corp"));
+    assert!(spec
+        .args
+        .iter()
+        .any(|a| a.starts_with("--user-data-dir=") && a.ends_with("/profiles/web-jira-work")));
+}
+
+#[test]
+fn no_web_browser_means_no_web_apps() {
+    let (daemon, _h, _audit) = make();
+    assert!(daemon.web_apps().is_empty());
+    assert!(daemon
+        .prepare_web_launch(&AppId("jira-work".into()))
+        .is_none());
+}
+
+#[test]
+fn launcher_status_reports_enrollment_and_volume_state() {
+    let daemon = offline_daemon();
+    let status = daemon.launcher_status();
+    assert_eq!(status.tenant, 1);
+    assert_eq!(status.policy_version, daemon.policy_version());
+    assert_eq!(status.gateway_high_water, 0);
+    assert_eq!(status.volume_unlocked, daemon.volume_is_unlocked());
 }
 
 #[test]

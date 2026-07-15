@@ -16,7 +16,7 @@ pub use audit::{
     SpoolEntry, GENESIS,
 };
 pub use command::{ControlReason, Envelope, GatewayCommand, SignedCommand};
-pub use enroll::{EnrollmentGrant, WrappedVolumeKey};
+pub use enroll::{EnrollmentGrant, TlsCredentials, WrappedVolumeKey};
 pub use link::{GatewayLink, LinkError, LoopbackLink};
 pub use sign::GatewaySigningKey;
 pub use verify::GatewayVerifier;

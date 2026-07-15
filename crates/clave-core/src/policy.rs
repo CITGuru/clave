@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use crate::app::AppPolicy;
 use crate::net::{DnsSteering, NetworkProvider};
 use crate::overlay::BorderCfg;
+use crate::web::WebPolicy;
 
 pub type UnixTime = u64;
 
@@ -21,6 +22,8 @@ pub struct PolicyBundle {
     pub screen: ScreenPolicy,
     #[serde(default)]
     pub input: InputPolicy,
+    #[serde(default)]
+    pub web: WebPolicy,
 }
 
 impl PolicyBundle {
@@ -46,7 +49,42 @@ impl PolicyBundle {
             overlay: OverlayPolicy::default(),
             screen: ScreenPolicy::default(),
             input: InputPolicy::default(),
+            web: WebPolicy::default(),
         }
+    }
+
+    pub fn validate(&self) -> Vec<String> {
+        let mut issues = Vec::new();
+
+        let mut app_ids = std::collections::HashSet::new();
+        for rule in &self.apps.allow {
+            if rule.app_id.0.trim().is_empty() {
+                issues.push("an app rule has an empty id".to_string());
+            } else if !app_ids.insert(rule.app_id.0.as_str()) {
+                issues.push(format!("duplicate app id: {}", rule.app_id.0));
+            }
+        }
+
+        if !self.web.apps.is_empty() && self.web.browser.trim().is_empty() {
+            issues.push("web apps are defined but web.browser is empty — they cannot launch".to_string());
+        }
+        let mut web_ids = std::collections::HashSet::new();
+        for w in &self.web.apps {
+            if w.url.trim().is_empty() {
+                issues.push(format!("web app '{}' has an empty url", w.id.0));
+            }
+            if w.id.0.trim().is_empty() {
+                issues.push("a web app has an empty id".to_string());
+            } else if !web_ids.insert(w.id.0.as_str()) {
+                issues.push(format!("duplicate web app id: {}", w.id.0));
+            }
+        }
+
+        if self.version == 0 {
+            issues.push("policy version is 0 — bump it before issuing to devices".to_string());
+        }
+
+        issues
     }
 }
 
@@ -205,6 +243,41 @@ pub const ZONE_PAIRS: [(Zone, Zone); 4] = [
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::app::{AppId, AppRule, BinaryMatch};
+    use crate::web::WebAppRule;
+
+    #[test]
+    fn a_default_bundle_only_flags_its_zero_version() {
+        assert_eq!(
+            PolicyBundle::restrictive_default().validate(),
+            vec!["policy version is 0 — bump it before issuing to devices".to_string()]
+        );
+    }
+
+    #[test]
+    fn validate_catches_duplicate_apps_and_orphan_web_apps() {
+        let mut pol = PolicyBundle::restrictive_default();
+        pol.version = 3;
+        pol.apps.allow.push(AppRule::new(
+            AppId("dup".into()),
+            BinaryMatch::Macos {
+                team_id: "T".into(),
+                signing_id: "a".into(),
+            },
+        ));
+        pol.apps.allow.push(AppRule::new(
+            AppId("dup".into()),
+            BinaryMatch::Macos {
+                team_id: "T".into(),
+                signing_id: "b".into(),
+            },
+        ));
+        pol.web.apps.push(WebAppRule::new("jira", "https://jira"));
+
+        let issues = pol.validate();
+        assert!(issues.iter().any(|i| i.contains("duplicate app id: dup")));
+        assert!(issues.iter().any(|i| i.contains("web.browser is empty")));
+    }
 
     fn net(blocked: &[&str]) -> NetworkPolicy {
         NetworkPolicy {

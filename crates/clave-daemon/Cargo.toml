@@ -7,6 +7,14 @@ rust-version = { workspace = true }
 authors = { workspace = true }
 description = "Clave privileged service: hosts the policy brain and drives the platform adapters."
 
+[features]
+# The device-code enrollment client's HTTP transport (reqwest). Off by default so the portable
+# orchestration + tests build with no network stack.
+enroll-http = ["dep:reqwest"]
+# The real networked gateway link: TCP + mutual-TLS (clave-proto's `mtls`). Off by default so the
+# sync loop rides the in-process loopback link unless a gateway is configured.
+gateway-mtls = ["clave-proto/mtls"]
+
 [dependencies]
 clave-platform = { path = "../clave-platform" }
 clave-core = { path = "../clave-core" }
@@ -17,7 +25,9 @@ clave-proto = { path = "../clave-proto" }
 arc-swap = "1"
 serde = { workspace = true }
 postcard = { version = "1", features = ["use-std"] }
+rand = "0.8"
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "sync", "net", "time"] }
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"], optional = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 clave-mac = { path = "../clave-mac" }
@@ -37,3 +47,4 @@ clave-testkit = { path = "../clave-testkit" }
 clave-proto = { path = "../clave-proto" }
 clave-gateway = { path = "../clave-gateway" }
 clave-identity = { path = "../clave-identity" }
+serde_json = "1"

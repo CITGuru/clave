@@ -7,13 +7,16 @@ use clave_core::{JoinReason, ZoneRegistry};
 use clave_net::LoopbackTunnel;
 use clave_platform::{Capability, EnforcementStatus, Platform, ProcessContainment, Zone};
 use clave_win::NetVerdict;
-use clave_proto::{AuditSpool, GatewaySigningKey, GatewayVerifier, TenantId};
-use clave_volume::{ClaveVolume, ContainerId, ContainerMeta, Dek, Kek, MemBacking, MemKeyStore};
+use clave_proto::{AuditSpool, LoopbackLink};
+use clave_volume::{ClaveVolume, ContainerMeta, Kek, MemBacking, MemKeyStore};
 
-use crate::{proc_id_for_pid, Daemon};
+use crate::{boot_enrollment, proc_id_for_pid, spawn_gateway_sync, Daemon, EnrollmentStore};
 
 /// How often the supervisor reconciles the work zone with the Job Object's live process tree.
 const SUPERVISE_INTERVAL: Duration = Duration::from_millis(500);
+
+const GATEWAY_SYNC_INTERVAL: Duration = Duration::from_secs(30);
+const VOLUME_KEYSTORE_KEK: [u8; 32] = [0x4B; 32];
 
 /// The Clave Disk mount point on Windows: the drive letter the encrypting WinFsp volume mounts at
 /// and the redirected HOME/temp each contained launch spec resolves against.
@@ -76,37 +79,62 @@ pub fn run_windows() {
         );
     }
 
-    let container = ContainerId(CONTAINER_ID);
+    let now = unix_now();
+    let booted = boot_enrollment(state_dir(), "win", CONTAINER_ID, demo_policy, now);
+    if booted.bootstrapped {
+        println!("clave-daemon: no enrollment on disk — bootstrapped a dev enrollment");
+    }
+    println!(
+        "clave-daemon: enrolled tenant {:?}, policy v{}",
+        booted.record.lock().expect("record lock poisoned").tenant,
+        booted.policy.version
+    );
+
     let keystore = Arc::new(MemKeyStore::new());
     keystore.provision(
-        container,
-        Kek::from_bytes([0x4B; 32]),
-        &Dek::from_bytes([0xDE; 64]),
+        booted.container,
+        Kek::from_bytes(VOLUME_KEYSTORE_KEK),
+        &booted.dek,
     );
     let volume = ClaveVolume::new(
-        ContainerMeta::new(container),
+        ContainerMeta::new(booted.container),
         keystore,
         Arc::new(MemBacking::zeroed(64)),
         zones.clone(),
     );
 
-    let signer = GatewaySigningKey::from_seed(TenantId(1), [0x6A; 32]);
-    let gateway = GatewayVerifier::new(TenantId(1), signer.public_key()).expect("valid pinned key");
-
     let daemon = Arc::new(Daemon::new(
         Arc::clone(&zones),
         Box::new(platform),
         Arc::new(AuditSpool::new()),
-        demo_policy(),
+        booted.policy.clone(),
         Box::new(LoopbackTunnel::new(0x5A)),
         Arc::new(Mutex::new(volume)),
-        gateway,
+        booted.gateway,
     ));
+
+    let obs_store = Arc::clone(&booted.store);
+    let obs_record = Arc::clone(&booted.record);
+    daemon.set_policy_observer(Box::new(move |bundle| {
+        let mut rec = obs_record.lock().expect("record lock poisoned");
+        rec.policy = bundle.clone();
+        obs_store.save(&rec);
+    }));
 
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
         .expect("tokio runtime");
+
+    let gw_tls = booted.record.lock().expect("record lock poisoned").tls.clone();
+    spawn_gateway_sync(
+        Arc::clone(&daemon),
+        select_gateway_link(&rt, gw_tls.as_ref()),
+        booted.device_signer,
+        booted.checkpoint_store,
+        GATEWAY_SYNC_INTERVAL,
+        unix_now,
+    );
 
     spawn_clipboard_guard(Arc::clone(&daemon), Arc::clone(&zones));
     if let Some(containment) = containment {
@@ -249,6 +277,35 @@ fn unix_now() -> clave_core::UnixTime {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0)
+}
+
+fn state_dir() -> std::path::PathBuf {
+    if let Ok(p) = std::env::var("CLAVE_STATE_DIR") {
+        return std::path::PathBuf::from(p);
+    }
+    std::env::var("LOCALAPPDATA")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|_| std::env::temp_dir())
+        .join("Clave")
+}
+
+fn select_gateway_link(
+    rt: &tokio::runtime::Runtime,
+    tls: Option<&clave_proto::TlsCredentials>,
+) -> Box<dyn clave_proto::GatewayLink> {
+    #[cfg(feature = "gateway-mtls")]
+    {
+        if let Some(tls) = tls {
+            if let Some(link) = crate::gateway_link_from_tls(rt, tls) {
+                return link;
+            }
+        }
+        if let Some(link) = crate::gateway_link_from_env(rt) {
+            return link;
+        }
+    }
+    let _ = (rt, tls);
+    Box::new(LoopbackLink::new())
 }
 
 fn demo_policy() -> clave_core::PolicyBundle {

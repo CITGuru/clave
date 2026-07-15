@@ -85,11 +85,30 @@ pub trait PolicyIssuer: Send + Sync {
         workspace: WorkspaceId,
         now: UnixTime,
     ) -> Result<Option<SignedCommand>, GatewayError>;
+
+    async fn current_policy(
+        &self,
+        workspace: WorkspaceId,
+    ) -> Result<Option<PolicyBundle>, GatewayError>;
+
+    async fn author_policy(
+        &self,
+        workspace: WorkspaceId,
+        bundle: PolicyBundle,
+    ) -> Result<PolicyBundle, GatewayError>;
+
+    async fn reissue_policy(
+        &self,
+        workspace: WorkspaceId,
+        now: UnixTime,
+    ) -> Result<Option<SignedCommand>, GatewayError>;
+
+    async fn policy_versions(&self, workspace: WorkspaceId) -> Result<Vec<u64>, GatewayError>;
 }
 
 pub struct MemPolicyIssuer {
     signer: GatewaySigningKey,
-    policies: Mutex<HashMap<WorkspaceId, PolicyBundle>>,
+    policies: Mutex<HashMap<WorkspaceId, Vec<PolicyBundle>>>,
     counter: Box<dyn CounterStore>,
 }
 
@@ -107,15 +126,36 @@ impl MemPolicyIssuer {
     }
 
     pub fn set_policy(&self, workspace: WorkspaceId, bundle: PolicyBundle) {
-        self.policies.lock().unwrap().insert(workspace, bundle);
+        self.policies.lock().unwrap().insert(workspace, vec![bundle]);
     }
 
     pub fn public_key(&self) -> [u8; 32] {
         self.signer.public_key()
     }
 
-    fn next_counter(&self) -> Result<u64, GatewayError> {
-        self.counter.next()
+    fn current(&self, workspace: WorkspaceId) -> Option<PolicyBundle> {
+        self.policies
+            .lock()
+            .unwrap()
+            .get(&workspace)
+            .and_then(|h| h.last().cloned())
+    }
+
+    fn sign_current(
+        &self,
+        workspace: WorkspaceId,
+        now: UnixTime,
+    ) -> Result<Option<SignedCommand>, GatewayError> {
+        let bundle = match self.current(workspace) {
+            Some(b) => b,
+            None => return Ok(None),
+        };
+        let counter = self.counter.next()?;
+        Ok(Some(self.signer.sign(
+            counter,
+            now,
+            GatewayCommand::UpdatePolicy(Box::new(bundle)),
+        )))
     }
 }
 
@@ -126,16 +166,44 @@ impl PolicyIssuer for MemPolicyIssuer {
         workspace: WorkspaceId,
         now: UnixTime,
     ) -> Result<Option<SignedCommand>, GatewayError> {
-        let bundle = match self.policies.lock().unwrap().get(&workspace).cloned() {
-            Some(b) => b,
-            None => return Ok(None),
-        };
-        let counter = self.next_counter()?;
-        Ok(Some(self.signer.sign(
-            counter,
-            now,
-            GatewayCommand::UpdatePolicy(Box::new(bundle)),
-        )))
+        self.sign_current(workspace, now)
+    }
+
+    async fn current_policy(
+        &self,
+        workspace: WorkspaceId,
+    ) -> Result<Option<PolicyBundle>, GatewayError> {
+        Ok(self.current(workspace))
+    }
+
+    async fn author_policy(
+        &self,
+        workspace: WorkspaceId,
+        mut bundle: PolicyBundle,
+    ) -> Result<PolicyBundle, GatewayError> {
+        let mut policies = self.policies.lock().unwrap();
+        let history = policies.entry(workspace).or_default();
+        bundle.version = history.last().map(|b| b.version + 1).unwrap_or(1);
+        history.push(bundle.clone());
+        Ok(bundle)
+    }
+
+    async fn reissue_policy(
+        &self,
+        workspace: WorkspaceId,
+        now: UnixTime,
+    ) -> Result<Option<SignedCommand>, GatewayError> {
+        self.sign_current(workspace, now)
+    }
+
+    async fn policy_versions(&self, workspace: WorkspaceId) -> Result<Vec<u64>, GatewayError> {
+        Ok(self
+            .policies
+            .lock()
+            .unwrap()
+            .get(&workspace)
+            .map(|h| h.iter().map(|b| b.version).collect())
+            .unwrap_or_default())
     }
 }
 

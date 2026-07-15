@@ -8,6 +8,7 @@ pub mod net;
 pub mod overlay;
 pub mod path;
 pub mod policy;
+pub mod web;
 pub mod zone;
 
 pub use app::{
@@ -28,4 +29,5 @@ pub use path::{classify_path, is_under_mount, PathClass};
 pub use policy::{
     ClipboardPolicy, FilePolicy, NetworkPolicy, OverlayPolicy, PolicyBundle, UnixTime,
 };
+pub use web::{WebAppInfo, WebAppRule, WebPolicy};
 pub use zone::{JoinReason, ZoneMember, ZoneRegistry};

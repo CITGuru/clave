@@ -18,6 +18,8 @@ clave-ipc = { path = "../clave-ipc" }
 clave-proto = { path = "../clave-proto" }
 # Load a policy bundle (JSON) for the launcher subcommands.
 serde_json = "1"
+# The `audit` subcommand reaches the running daemon over the launcher IPC socket.
+tokio = { version = "1", features = ["rt", "macros", "net", "time"] }
 
 # The OS adapter is linked per target (doc 11 §2), to surface its enforcement posture.
 [target.'cfg(target_os = "macos")'.dependencies]
