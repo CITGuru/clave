@@ -1,10 +1,8 @@
-use clave_core::{
-    decide, path::is_under_mount, Access, Action, PolicyBundle, UnixTime, ZoneRegistry,
-};
-use clave_platform::{Decision, ProcId};
+use clave_core::{decide_file_open, path::is_under_mount, Access, ZoneRegistry};
+use clave_platform::ProcId;
 use std::sync::{OnceLock, RwLock};
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct EsGateConfig {
     pub mount_prefix: String,
     pub allow_save_outside_enclave: bool,
@@ -42,12 +40,6 @@ pub fn apply_file_policy(files: &clave_core::FilePolicy) {
     g.allow_save_outside_enclave = files.allow_save_outside_enclave;
 }
 
-fn policy_for_config(config: &EsGateConfig) -> PolicyBundle {
-    let mut pol = PolicyBundle::restrictive_default();
-    pol.files.allow_save_outside_enclave = config.allow_save_outside_enclave;
-    pol
-}
-
 pub fn authorize_open_with(
     zones: &ZoneRegistry,
     proc: ProcId,
@@ -57,25 +49,21 @@ pub fn authorize_open_with(
 ) -> bool {
     let inside = is_under_mount(path, &config.mount_prefix);
     let access = if write { Access::Write } else { Access::Read };
-    let verdict = decide(
-        &Action::FileOpen {
-            proc,
-            inside_enclave: inside,
-            access,
-        },
-        zones,
-        &policy_for_config(config),
-        UnixTime::MAX,
-    );
-    matches!(verdict.decision, Decision::Allow)
+    decide_file_open(
+        zones.is_supervised(&proc),
+        inside,
+        access,
+        config.allow_save_outside_enclave,
+    )
+    .is_allow()
 }
 
 pub fn authorize_open(zones: &ZoneRegistry, proc: ProcId, path: &str, write: bool) -> bool {
-    let config = es_gate().read().expect("es gate lock poisoned").clone();
+    let config = es_gate().read().expect("es gate lock poisoned");
     authorize_open_with(zones, proc, path, write, &config)
 }
 
-pub fn authorize_clone_with(
+pub fn authorize_relocation_with(
     zones: &ZoneRegistry,
     proc: ProcId,
     source: &str,
@@ -86,9 +74,9 @@ pub fn authorize_clone_with(
         && authorize_open_with(zones, proc, target, true, config)
 }
 
-pub fn authorize_clone(zones: &ZoneRegistry, proc: ProcId, source: &str, target: &str) -> bool {
-    let config = es_gate().read().expect("es gate lock poisoned").clone();
-    authorize_clone_with(zones, proc, source, target, &config)
+pub fn authorize_relocation(zones: &ZoneRegistry, proc: ProcId, source: &str, target: &str) -> bool {
+    let config = es_gate().read().expect("es gate lock poisoned");
+    authorize_relocation_with(zones, proc, source, target, &config)
 }
 
 #[cfg(test)]
@@ -146,7 +134,7 @@ mod tests {
         let p = token(7);
         zones.join(p, JoinReason::Launcher);
 
-        assert!(!authorize_clone_with(
+        assert!(!authorize_relocation_with(
             &zones,
             p,
             "/Volumes/ClaveDisk-dev/ada/secret.pdf",
@@ -161,7 +149,7 @@ mod tests {
         let zones = ZoneRegistry::new();
         let p = token(99);
 
-        assert!(!authorize_clone_with(
+        assert!(!authorize_relocation_with(
             &zones,
             p,
             "/Volumes/ClaveDisk/ada/secret.pdf",
@@ -177,11 +165,89 @@ mod tests {
         let p = token(11);
         zones.join(p, JoinReason::Launcher);
 
-        assert!(authorize_clone_with(
+        assert!(authorize_relocation_with(
             &zones,
             p,
             "/Users/alice/Downloads/report.pdf",
             "/Volumes/ClaveDisk/ada/report.pdf",
+            &cfg,
+        ));
+    }
+
+    #[test]
+    fn supervised_rename_out_of_enclave_is_denied() {
+        let cfg = config("/Volumes/ClaveDisk");
+        let zones = ZoneRegistry::new();
+        let p = token(21);
+        zones.join(p, JoinReason::Launcher);
+
+        assert!(!authorize_relocation_with(
+            &zones,
+            p,
+            "/Volumes/ClaveDisk/ada/secret.pdf",
+            "/Users/alice/Desktop/secret.pdf",
+            &cfg,
+        ));
+    }
+
+    #[test]
+    fn non_supervised_rename_out_of_enclave_is_denied() {
+        let cfg = config("/Volumes/ClaveDisk");
+        let zones = ZoneRegistry::new();
+        let p = token(22);
+
+        assert!(!authorize_relocation_with(
+            &zones,
+            p,
+            "/Volumes/ClaveDisk/ada/secret.pdf",
+            "/Users/alice/Desktop/secret.pdf",
+            &cfg,
+        ));
+    }
+
+    #[test]
+    fn supervised_rename_into_enclave_is_allowed() {
+        let cfg = config("/Volumes/ClaveDisk");
+        let zones = ZoneRegistry::new();
+        let p = token(23);
+        zones.join(p, JoinReason::Launcher);
+
+        assert!(authorize_relocation_with(
+            &zones,
+            p,
+            "/Users/alice/Downloads/in.pdf",
+            "/Volumes/ClaveDisk/ada/in.pdf",
+            &cfg,
+        ));
+    }
+
+    #[test]
+    fn supervised_hardlink_out_of_enclave_is_denied() {
+        let cfg = config("/Volumes/ClaveDisk");
+        let zones = ZoneRegistry::new();
+        let p = token(24);
+        zones.join(p, JoinReason::Launcher);
+
+        assert!(!authorize_relocation_with(
+            &zones,
+            p,
+            "/Volumes/ClaveDisk/ada/secret.pdf",
+            "/Users/alice/Desktop/secret.hardlink",
+            &cfg,
+        ));
+    }
+
+    #[test]
+    fn non_supervised_hardlink_out_of_enclave_is_denied() {
+        let cfg = config("/Volumes/ClaveDisk");
+        let zones = ZoneRegistry::new();
+        let p = token(25);
+
+        assert!(!authorize_relocation_with(
+            &zones,
+            p,
+            "/Volumes/ClaveDisk/ada/secret.pdf",
+            "/tmp/leak.hardlink",
             &cfg,
         ));
     }

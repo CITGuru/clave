@@ -15,7 +15,7 @@ pub use app::{
     LaunchProfile, LaunchSpec, LaunchableApp, ResolvedLaunch,
 };
 pub use audit::{AuditAction, AuditEvent, AuditSink, NoopAuditSink};
-pub use decide::{clip_decision, decide, Access, Action, Reason, Verdict};
+pub use decide::{clip_decision, decide, decide_file_open, Access, Action, Reason, Verdict};
 pub use learn::{LearnSession, LearnedProfile, Observation};
 pub use net::{
     classify_dns_flow, classify_flow, decide_dns, DnsDecision, DnsSteering, ForwardMode,

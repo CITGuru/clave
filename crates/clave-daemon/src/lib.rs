@@ -65,6 +65,8 @@ pub enum GatewayError {
     Volume(VolumeError),
 }
 
+pub type PolicyObserver = Box<dyn Fn(&PolicyBundle) + Send + Sync>;
+
 pub struct Daemon {
     zones: Arc<ZoneRegistry>,
     policy: ArcSwap<PolicyBundle>,
@@ -73,6 +75,7 @@ pub struct Daemon {
     router: Mutex<SplitRouter>,
     volume: Arc<Mutex<ClaveVolume>>,
     gateway: Mutex<GatewayVerifier>,
+    policy_observer: Mutex<Option<PolicyObserver>>,
 }
 
 impl Daemon {
@@ -93,7 +96,12 @@ impl Daemon {
             router: Mutex::new(SplitRouter::new(tunnel)),
             volume,
             gateway: Mutex::new(gateway),
+            policy_observer: Mutex::new(None),
         }
+    }
+
+    pub fn set_policy_observer(&self, observer: PolicyObserver) {
+        *self.policy_observer.lock().unwrap() = Some(observer);
     }
 
     pub fn zones(&self) -> &Arc<ZoneRegistry> {
@@ -104,8 +112,6 @@ impl Daemon {
         self.policy.load().version
     }
 
-    /// A cloned snapshot of the active policy bundle, for adapters that need to read it off the
-    /// daemon (e.g. the Windows split-tunnel deriving its blocked-destination set).
     pub fn policy_snapshot(&self) -> Arc<PolicyBundle> {
         self.policy.load_full()
     }
@@ -208,8 +214,6 @@ impl Daemon {
             .ok_or(LaunchError::NotLaunchable)?;
         let launched = spawn_contained(&spec).map_err(LaunchError::Spawn)?;
         self.on_zone_join(launched.proc, JoinReason::Launcher, now);
-        // If the platform can contain a process tree (Windows Job Objects), place the launched
-        // app under the boundary so it — and any child it spawns — is held and killable as a unit.
         if let Some(containment) = self.platform.containment() {
             if let Err(e) = containment.contain(launched.pid) {
                 eprintln!(
@@ -360,6 +364,9 @@ impl Daemon {
             });
         }
         self.policy.store(Arc::new(next));
+        if let Some(observer) = self.policy_observer.lock().unwrap().as_ref() {
+            observer(&self.policy.load());
+        }
         Ok(())
     }
 
@@ -543,6 +550,10 @@ fn spawn_macos_app(spec: &LaunchSpec) -> std::io::Result<LaunchedApp> {
     use std::process::{Command, Stdio};
 
     let bundle = &spec.executable;
+    let bundle_path = std::path::Path::new(bundle);
+    let preexisting: std::collections::HashSet<u32> = clave_mac::bundle_identifier(bundle_path)
+        .map(|id| clave_mac::running_pids_for_bundle(&id).into_iter().collect())
+        .unwrap_or_default();
     let home = spec
         .env
         .iter()
@@ -569,8 +580,9 @@ fn spawn_macos_app(spec: &LaunchSpec) -> std::io::Result<LaunchedApp> {
 
     let child = cmd.spawn()?;
     let open_pid = child.id();
-    let pid = clave_mac::wait_for_app_pid(
-        std::path::Path::new(bundle),
+    let pid = clave_mac::wait_for_new_app_pid(
+        bundle_path,
+        &preexisting,
         std::time::Duration::from_secs(3),
     )
     .unwrap_or(open_pid);

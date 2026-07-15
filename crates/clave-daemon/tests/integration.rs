@@ -354,6 +354,37 @@ fn policy_rollback_is_rejected() {
 }
 
 #[test]
+fn policy_update_notifies_the_observer() {
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    let (daemon, _h, _audit) = make();
+
+    let seen = Arc::new(AtomicU64::new(0));
+    let recorder = Arc::clone(&seen);
+    daemon.set_policy_observer(Box::new(move |bundle| {
+        recorder.store(bundle.version, Ordering::SeqCst);
+    }));
+
+    let mut v3 = PolicyBundle::restrictive_default();
+    v3.version = 3;
+    daemon.update_policy(v3).unwrap();
+    assert_eq!(
+        seen.load(Ordering::SeqCst),
+        3,
+        "the observer sees the applied policy"
+    );
+
+    let mut stale = PolicyBundle::restrictive_default();
+    stale.version = 1;
+    assert!(daemon.update_policy(stale).is_err());
+    assert_eq!(
+        seen.load(Ordering::SeqCst),
+        3,
+        "a rejected rollback must not notify the observer"
+    );
+}
+
+#[test]
 fn wipe_invokes_volume_crypto_shred() {
     let (daemon, h, audit, vol) = make_full();
     daemon.unlock_volume(1).unwrap();
