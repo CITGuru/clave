@@ -38,13 +38,13 @@ pub use input::{TapWatch, Tapper};
 #[cfg(target_os = "macos")]
 mod launch;
 #[cfg(target_os = "macos")]
-pub use launch::{bundle_identifier, running_pids_for_bundle, wait_for_app_pid};
+pub use launch::{bundle_identifier, running_pids_for_bundle, wait_for_new_app_pid};
 
 #[cfg(target_os = "macos")]
 mod es_gate;
 #[cfg(target_os = "macos")]
 pub use es_gate::{
-    apply_file_policy, authorize_clone, authorize_open, set_allow_save_outside_enclave,
+    apply_file_policy, authorize_open, authorize_relocation, set_allow_save_outside_enclave,
     set_mount_prefix,
 };
 
@@ -58,8 +58,6 @@ mod se_seal;
 
 #[cfg(target_os = "macos")]
 mod volume;
-// Stub so `MacPlatform` (and the rest of this crate) still compiles on
-// Linux/Windows CI; the real `hdiutil` + Keychain + SE mount is macOS-only.
 #[cfg(not(target_os = "macos"))]
 mod volume {
     use std::path::PathBuf;
@@ -284,12 +282,8 @@ pub unsafe extern "C" fn clave_mac_authorize_open(
     crate::es_gate::authorize_open(zones(), ProcId::macos(t), &path, write)
 }
 
-/// # Safety
-/// `token_ptr` must be null or point to 8 readable, aligned `u32`s (a macOS `audit_token_t`).
-/// `source_ptr` and `target_ptr` must each be null or a NUL-terminated C string.
 #[cfg(target_os = "macos")]
-#[no_mangle]
-pub unsafe extern "C" fn clave_mac_authorize_clone(
+unsafe fn authorize_relocation_ffi(
     token_ptr: *const u32,
     source_ptr: *const c_char,
     target_ptr: *const c_char,
@@ -305,7 +299,46 @@ pub unsafe extern "C" fn clave_mac_authorize_clone(
     if source.is_empty() || target.is_empty() {
         return false;
     }
-    crate::es_gate::authorize_clone(zones(), ProcId::macos(t), &source, &target)
+    crate::es_gate::authorize_relocation(zones(), ProcId::macos(t), &source, &target)
+}
+
+/// # Safety
+/// `token_ptr` must be null or point to 8 readable, aligned `u32`s (a macOS `audit_token_t`).
+/// `source_ptr` and `target_ptr` must each be null or a NUL-terminated C string.
+#[cfg(target_os = "macos")]
+#[no_mangle]
+pub unsafe extern "C" fn clave_mac_authorize_clone(
+    token_ptr: *const u32,
+    source_ptr: *const c_char,
+    target_ptr: *const c_char,
+) -> bool {
+    unsafe { authorize_relocation_ffi(token_ptr, source_ptr, target_ptr) }
+}
+
+/// # Safety
+/// `token_ptr` must be null or point to 8 readable, aligned `u32`s (a macOS `audit_token_t`).
+/// `source_ptr` and `target_ptr` must each be null or a NUL-terminated C string.
+#[cfg(target_os = "macos")]
+#[no_mangle]
+pub unsafe extern "C" fn clave_mac_authorize_rename(
+    token_ptr: *const u32,
+    source_ptr: *const c_char,
+    target_ptr: *const c_char,
+) -> bool {
+    unsafe { authorize_relocation_ffi(token_ptr, source_ptr, target_ptr) }
+}
+
+/// # Safety
+/// `token_ptr` must be null or point to 8 readable, aligned `u32`s (a macOS `audit_token_t`).
+/// `source_ptr` and `target_ptr` must each be null or a NUL-terminated C string.
+#[cfg(target_os = "macos")]
+#[no_mangle]
+pub unsafe extern "C" fn clave_mac_authorize_link(
+    token_ptr: *const u32,
+    source_ptr: *const c_char,
+    target_ptr: *const c_char,
+) -> bool {
+    unsafe { authorize_relocation_ffi(token_ptr, source_ptr, target_ptr) }
 }
 
 #[cfg(test)]

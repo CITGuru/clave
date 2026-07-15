@@ -420,4 +420,45 @@ impl LauncherClient {
             None => Err(TransportError::Truncated),
         }
     }
+
+    pub async fn status(&mut self) -> Result<crate::LauncherStatus, TransportError> {
+        self.conn.write(&LauncherRequest::Status).await?;
+        match self.conn.read::<LauncherReply>().await? {
+            Some(LauncherReply::Status { status }) => Ok(status),
+            Some(_) => Err(TransportError::Handshake("expected Status")),
+            None => Err(TransportError::Truncated),
+        }
+    }
+
+    pub async fn list_web_apps(
+        &mut self,
+    ) -> Result<Vec<clave_core::WebAppInfo>, TransportError> {
+        self.conn.write(&LauncherRequest::ListWebApps).await?;
+        match self.conn.read::<LauncherReply>().await? {
+            Some(LauncherReply::WebApps { apps }) => Ok(apps),
+            Some(_) => Err(TransportError::Handshake("expected WebApps")),
+            None => Err(TransportError::Truncated),
+        }
+    }
+
+    pub async fn launch_web(&mut self, app_id: AppId) -> Result<Option<u32>, TransportError> {
+        self.conn.write(&LauncherRequest::LaunchWeb { app_id }).await?;
+        match self.conn.read::<LauncherReply>().await? {
+            Some(LauncherReply::Launched { pid }) => Ok(pid),
+            Some(LauncherReply::LaunchFailed { error }) => Err(TransportError::LaunchFailed(error)),
+            Some(_) => Err(TransportError::Handshake("expected Launched")),
+            None => Err(TransportError::Truncated),
+        }
+    }
+
+    pub async fn peek_audit(
+        &mut self,
+    ) -> Result<Vec<clave_core::AuditEvent>, TransportError> {
+        self.conn.write(&LauncherRequest::PeekAudit).await?;
+        match self.conn.read::<LauncherReply>().await? {
+            Some(LauncherReply::Audit { events }) => Ok(events),
+            Some(_) => Err(TransportError::Handshake("expected Audit")),
+            None => Err(TransportError::Truncated),
+        }
+    }
 }

@@ -14,7 +14,10 @@ postgres = ["dep:sqlx", "dep:uuid"]
 # Real WorkOS-backed `IdentityProvider` (reqwest + JWKS verification). Off by default (needs network).
 workos = ["dep:reqwest", "dep:jsonwebtoken"]
 # The runnable production binary: both adapters + a tokio runtime to serve the router.
-server = ["postgres", "workos", "dep:tokio"]
+server = ["postgres", "workos", "dep:tokio", "device-link"]
+# The device audit link + cert issuance: pumps a mutual-TLS `DeviceLink`'s batches into the
+# ledger, and mints CA-signed device certs at enrollment.
+device-link = ["clave-proto/ca"]
 
 [dependencies]
 clave-identity = { path = "../clave-identity" }
@@ -57,3 +60,6 @@ axum = "0.8"
 serde_json = "1"
 # The wrapped-volume-key round-trip test unwraps the issued key with the device KEK.
 clave-volume = { path = "../clave-volume" }
+# The audit-query test signs device batches and emits events.
+clave-proto = { path = "../clave-proto" }
+clave-core = { path = "../clave-core" }

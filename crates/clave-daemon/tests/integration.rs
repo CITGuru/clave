@@ -2,7 +2,8 @@ use std::sync::{Arc, Mutex};
 
 use clave_core::{
     Action, AppId, AppRule, AuditAction, BinaryMatch, DnsDecision, DnsSteering, ForwardMode,
-    JoinReason, LaunchProfile, NetworkProvider, OverlayPolicy, PathClass, PolicyBundle,
+    JoinReason, LaunchProfile, NetworkProvider, OverlayPolicy, PathClass, PolicyBundle, WebAppRule,
+    WebPolicy,
 };
 use clave_daemon::{
     Checkpoint, CheckpointStore, Daemon, DaemonEvent, FileCheckpointStore, GatewayError,
@@ -129,6 +130,78 @@ fn offline_daemon() -> Arc<Daemon> {
         Arc::new(Mutex::new(volume)),
         gateway,
     ))
+}
+
+#[test]
+fn repeated_denials_are_coalesced_in_the_audit_chain() {
+    let (daemon, _h, _audit) = make();
+    let leak = Action::ClipboardTransfer {
+        src: Zone::Work,
+        dst: Zone::Personal,
+        fmt: ClipFormat::Files,
+    };
+
+    for _ in 0..50 {
+        assert_eq!(daemon.decide_action(&leak, 1_000).decision, Decision::Deny);
+    }
+    assert_eq!(
+        daemon.peek_audit().0.len(),
+        1,
+        "a tight denial loop within the window audits once"
+    );
+
+    daemon.decide_action(&leak, 1_005);
+    assert_eq!(
+        daemon.peek_audit().0.len(),
+        2,
+        "a denial after the coalesce window is audited afresh"
+    );
+}
+
+#[test]
+fn web_apps_resolve_to_a_contained_browser_window() {
+    let (daemon, _h, _audit) = make();
+    let mut pol = PolicyBundle::restrictive_default();
+    pol.version = 1;
+    pol.web = WebPolicy {
+        browser: "/Applications/Google Chrome.app".into(),
+        apps: vec![WebAppRule::new("jira-work", "https://jira.corp").with_display_name("Jira")],
+    };
+    daemon.update_policy(pol).unwrap();
+
+    let apps = daemon.web_apps();
+    assert_eq!(apps.len(), 1);
+    assert_eq!(apps[0].label, "Jira");
+    assert_eq!(apps[0].url, "https://jira.corp");
+
+    let spec = daemon
+        .prepare_web_launch(&AppId("jira-work".into()))
+        .expect("resolves to a launch spec");
+    assert_eq!(spec.executable, "/Applications/Google Chrome.app");
+    assert!(spec.args.iter().any(|a| a == "--app=https://jira.corp"));
+    assert!(spec
+        .args
+        .iter()
+        .any(|a| a.starts_with("--user-data-dir=") && a.ends_with("/profiles/web-jira-work")));
+}
+
+#[test]
+fn no_web_browser_means_no_web_apps() {
+    let (daemon, _h, _audit) = make();
+    assert!(daemon.web_apps().is_empty());
+    assert!(daemon
+        .prepare_web_launch(&AppId("jira-work".into()))
+        .is_none());
+}
+
+#[test]
+fn launcher_status_reports_enrollment_and_volume_state() {
+    let daemon = offline_daemon();
+    let status = daemon.launcher_status();
+    assert_eq!(status.tenant, 1);
+    assert_eq!(status.policy_version, daemon.policy_version());
+    assert_eq!(status.gateway_high_water, 0);
+    assert_eq!(status.volume_unlocked, daemon.volume_is_unlocked());
 }
 
 #[test]
@@ -351,6 +424,37 @@ fn policy_rollback_is_rejected() {
         })
     );
     assert_eq!(daemon.policy_version(), 2, "rollback must not take effect");
+}
+
+#[test]
+fn policy_update_notifies_the_observer() {
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    let (daemon, _h, _audit) = make();
+
+    let seen = Arc::new(AtomicU64::new(0));
+    let recorder = Arc::clone(&seen);
+    daemon.set_policy_observer(Box::new(move |bundle| {
+        recorder.store(bundle.version, Ordering::SeqCst);
+    }));
+
+    let mut v3 = PolicyBundle::restrictive_default();
+    v3.version = 3;
+    daemon.update_policy(v3).unwrap();
+    assert_eq!(
+        seen.load(Ordering::SeqCst),
+        3,
+        "the observer sees the applied policy"
+    );
+
+    let mut stale = PolicyBundle::restrictive_default();
+    stale.version = 1;
+    assert!(daemon.update_policy(stale).is_err());
+    assert_eq!(
+        seen.load(Ordering::SeqCst),
+        3,
+        "a rejected rollback must not notify the observer"
+    );
 }
 
 #[test]

@@ -1,6 +1,6 @@
 # Clave — Implementation Status
 
-A snapshot of what's built, what's wired together, and what still needs platform-specific approvals or hosts. For what Clave *is* and how to run it, see the [README](README.md). For architecture and subsystem design, see [`docs/`](docs/README.md).
+A snapshot of what's built, what's wired together, and what still needs platform-specific approvals or hosts. For what Clave *is* and how to run it, see the [README](README.md). For architecture and subsystem design, see [`docs/`](docs/README.md). For the tracked list of work buildable on any dev machine today (no Windows host / Apple entitlement / driver signing), see the [non-OS-gated backlog](BACKLOG.md).
 
 ## Phases
 

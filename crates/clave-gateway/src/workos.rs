@@ -25,6 +25,9 @@ fn map_method(m: Option<&str>) -> AuthMethod {
         Some("SSO") => AuthMethod::Sso { verified: true },
         Some("Password") => AuthMethod::Password,
         Some("MagicAuth") => AuthMethod::EmailCode,
+        // OAuth social logins (GoogleOAuth, MicrosoftOAuth, …) are not enterprise SSO and must
+        // not satisfy a workspace's `SsoMode::Required`.
+        Some(other) if other.ends_with("OAuth") => AuthMethod::Sso { verified: false },
         _ => AuthMethod::EmailCode,
     }
 }
@@ -204,5 +207,45 @@ impl IdentityProvider for WorkosProvider {
             return Ok(Some(self.verify_and_build(body).await?));
         }
         Ok(None)
+    }
+
+    async fn refresh_session(&self, refresh_token: &str) -> Result<VerifiedUser, GatewayError> {
+        let resp = self
+            .http
+            .post(format!("{}/user_management/authenticate", self.base_url))
+            .json(&serde_json::json!({
+                "client_id": self.client_id,
+                "client_secret": self.api_key,
+                "grant_type": "refresh_token",
+                "refresh_token": refresh_token,
+            }))
+            .send()
+            .await
+            .map_err(idp_err)?;
+        if !resp.status().is_success() {
+            return Err(GatewayError::Idp(format!(
+                "WorkOS refresh failed: HTTP {}",
+                resp.status()
+            )));
+        }
+        let body: AuthResponse = resp.json().await.map_err(idp_err)?;
+        self.verify_and_build(body).await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_enterprise_sso_maps_to_verified_sso() {
+        assert_eq!(map_method(Some("SSO")), AuthMethod::Sso { verified: true });
+        assert_eq!(
+            map_method(Some("GoogleOAuth")),
+            AuthMethod::Sso { verified: false }
+        );
+        assert_eq!(map_method(Some("Password")), AuthMethod::Password);
+        assert_eq!(map_method(Some("MagicAuth")), AuthMethod::EmailCode);
+        assert_eq!(map_method(None), AuthMethod::EmailCode);
     }
 }

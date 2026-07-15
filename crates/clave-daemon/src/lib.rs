@@ -6,9 +6,9 @@ use arc_swap::ArcSwap;
 use clave_core::{
     classify_exec, decide, Action, AppId, AuditAction, AuditEvent, AuditSink, BinaryMatch,
     DnsDecision, ExecVerdict, JoinReason, LaunchSpec, LaunchableApp, PathClass, PolicyBundle,
-    Reason, ResolvedLaunch, UnixTime, Verdict, ZoneRegistry,
+    Reason, ResolvedLaunch, UnixTime, Verdict, WebAppInfo, ZoneRegistry,
 };
-use clave_ipc::{DaemonMsg, LauncherReply, LauncherRequest, ShimMsg};
+use clave_ipc::{DaemonMsg, LauncherReply, LauncherRequest, LauncherStatus, ShimMsg};
 use clave_net::{FlowDisposition, FlowId, Inbound, Outbound, SplitRouter, Tunnel};
 use clave_platform::{EnforcementReport, Platform, ProcId, Route, WindowId};
 use clave_proto::{
@@ -20,6 +20,20 @@ use serde::{Deserialize, Serialize};
 
 mod enroll;
 pub use enroll::{AcceptedEnrollment, DeviceEnrollment, DeviceVolumeKey, EnrollError};
+
+mod enrollment_store;
+pub use enrollment_store::{
+    boot_enrollment, bootstrap_dev_enrollment, BootedEnrollment, EnrollmentRecord, EnrollmentStore,
+    FileEnrollmentStore,
+};
+
+mod enroll_client;
+pub use enroll_client::{
+    open_url, run_enroll_cli, CompleteRequest, CompletionStatus, DeviceAuth, EnrollClientError,
+    EnrollmentClient, EnrollmentConfig, EnrollmentTransport, PollStatus,
+};
+#[cfg(feature = "enroll-http")]
+pub use enroll_client::HttpEnrollmentTransport;
 
 #[cfg(target_os = "macos")]
 pub mod mac_main;
@@ -65,6 +79,8 @@ pub enum GatewayError {
     Volume(VolumeError),
 }
 
+pub type PolicyObserver = Box<dyn Fn(&PolicyBundle) + Send + Sync>;
+
 pub struct Daemon {
     zones: Arc<ZoneRegistry>,
     policy: ArcSwap<PolicyBundle>,
@@ -73,7 +89,11 @@ pub struct Daemon {
     router: Mutex<SplitRouter>,
     volume: Arc<Mutex<ClaveVolume>>,
     gateway: Mutex<GatewayVerifier>,
+    policy_observer: Mutex<Option<PolicyObserver>>,
+    last_audit: Mutex<Option<(AuditAction, UnixTime)>>,
 }
+
+const AUDIT_COALESCE_SECS: UnixTime = 2;
 
 impl Daemon {
     pub fn new(
@@ -93,7 +113,13 @@ impl Daemon {
             router: Mutex::new(SplitRouter::new(tunnel)),
             volume,
             gateway: Mutex::new(gateway),
+            policy_observer: Mutex::new(None),
+            last_audit: Mutex::new(None),
         }
+    }
+
+    pub fn set_policy_observer(&self, observer: PolicyObserver) {
+        *self.policy_observer.lock().unwrap() = Some(observer);
     }
 
     pub fn zones(&self) -> &Arc<ZoneRegistry> {
@@ -104,8 +130,6 @@ impl Daemon {
         self.policy.load().version
     }
 
-    /// A cloned snapshot of the active policy bundle, for adapters that need to read it off the
-    /// daemon (e.g. the Windows split-tunnel deriving its blocked-destination set).
     pub fn policy_snapshot(&self) -> Arc<PolicyBundle> {
         self.policy.load_full()
     }
@@ -208,8 +232,6 @@ impl Daemon {
             .ok_or(LaunchError::NotLaunchable)?;
         let launched = spawn_contained(&spec).map_err(LaunchError::Spawn)?;
         self.on_zone_join(launched.proc, JoinReason::Launcher, now);
-        // If the platform can contain a process tree (Windows Job Objects), place the launched
-        // app under the boundary so it — and any child it spawns — is held and killable as a unit.
         if let Some(containment) = self.platform.containment() {
             if let Err(e) = containment.contain(launched.pid) {
                 eprintln!(
@@ -221,15 +243,64 @@ impl Daemon {
         Ok(launched)
     }
 
+    pub fn web_apps(&self) -> Vec<WebAppInfo> {
+        let policy = self.policy.load();
+        if !policy.web.is_launchable() {
+            return Vec::new();
+        }
+        policy
+            .web
+            .apps
+            .iter()
+            .map(|r| WebAppInfo {
+                app_id: r.id.clone(),
+                label: r.label().to_string(),
+                url: r.url.clone(),
+            })
+            .collect()
+    }
+
+    pub fn prepare_web_launch(&self, app_id: &AppId) -> Option<LaunchSpec> {
+        let mount = self.platform.volume().mount_point()?;
+        let policy = self.policy.load();
+        if !policy.web.is_launchable() {
+            return None;
+        }
+        let rule = policy.web.rule(app_id)?;
+        Some(rule.launch_spec(&policy.web.browser, &mount, &contained_user()))
+    }
+
+    pub fn launch_web(&self, app_id: &AppId, now: UnixTime) -> Result<LaunchedApp, LaunchError> {
+        let spec = self
+            .prepare_web_launch(app_id)
+            .ok_or(LaunchError::NotLaunchable)?;
+        let launched = spawn_contained(&spec).map_err(LaunchError::Spawn)?;
+        self.on_zone_join(launched.proc, JoinReason::Launcher, now);
+        Ok(launched)
+    }
+
     pub fn decide_action(&self, action: &Action, now: UnixTime) -> Verdict {
         let pol = self.policy.load_full();
         let verdict = decide(action, &self.zones, &pol, now);
         if !verdict.is_allow() {
             if let Some(a) = audit_action_for(action, &verdict) {
-                self.audit.emit(AuditEvent::new(now, a, verdict));
+                if self.should_audit(a, now) {
+                    self.audit.emit(AuditEvent::new(now, a, verdict));
+                }
             }
         }
         verdict
+    }
+
+    fn should_audit(&self, action: AuditAction, now: UnixTime) -> bool {
+        let mut last = self.last_audit.lock().unwrap();
+        if let Some((prev, ts)) = *last {
+            if prev == action && now.saturating_sub(ts) < AUDIT_COALESCE_SECS {
+                return false;
+            }
+        }
+        *last = Some((action, now));
+        true
     }
 
     pub fn on_work_window_created(&self, w: WindowId) {
@@ -348,6 +419,37 @@ impl Daemon {
                     .map(|(cap, status)| (cap.to_string(), status.to_string()))
                     .collect(),
             },
+            LauncherRequest::Status => LauncherReply::Status {
+                status: self.launcher_status(),
+            },
+            LauncherRequest::ListWebApps => LauncherReply::WebApps {
+                apps: self.web_apps(),
+            },
+            LauncherRequest::LaunchWeb { app_id } => match self.launch_web(&app_id, now) {
+                Ok(launched) => LauncherReply::Launched {
+                    pid: Some(launched.pid),
+                },
+                Err(e) => LauncherReply::LaunchFailed {
+                    error: e.to_string(),
+                },
+            },
+            LauncherRequest::PeekAudit => LauncherReply::Audit {
+                events: self.peek_audit().0.into_iter().map(|e| e.event).collect(),
+            },
+        }
+    }
+
+    pub fn launcher_status(&self) -> LauncherStatus {
+        let (tenant, gateway_high_water) = {
+            let gateway = self.gateway.lock().unwrap();
+            (gateway.tenant().0, gateway.high_water())
+        };
+        LauncherStatus {
+            tenant,
+            policy_version: self.policy_version(),
+            volume_unlocked: self.volume_is_unlocked(),
+            mount_point: self.platform.volume().mount_point(),
+            gateway_high_water,
         }
     }
 
@@ -360,6 +462,9 @@ impl Daemon {
             });
         }
         self.policy.store(Arc::new(next));
+        if let Some(observer) = self.policy_observer.lock().unwrap().as_ref() {
+            observer(&self.policy.load());
+        }
         Ok(())
     }
 
@@ -543,6 +648,10 @@ fn spawn_macos_app(spec: &LaunchSpec) -> std::io::Result<LaunchedApp> {
     use std::process::{Command, Stdio};
 
     let bundle = &spec.executable;
+    let bundle_path = std::path::Path::new(bundle);
+    let preexisting: std::collections::HashSet<u32> = clave_mac::bundle_identifier(bundle_path)
+        .map(|id| clave_mac::running_pids_for_bundle(&id).into_iter().collect())
+        .unwrap_or_default();
     let home = spec
         .env
         .iter()
@@ -569,8 +678,9 @@ fn spawn_macos_app(spec: &LaunchSpec) -> std::io::Result<LaunchedApp> {
 
     let child = cmd.spawn()?;
     let open_pid = child.id();
-    let pid = clave_mac::wait_for_app_pid(
-        std::path::Path::new(bundle),
+    let pid = clave_mac::wait_for_new_app_pid(
+        bundle_path,
+        &preexisting,
         std::time::Duration::from_secs(3),
     )
     .unwrap_or(open_pid);
@@ -859,4 +969,82 @@ impl GatewaySync {
         }
         report
     }
+}
+
+#[cfg(feature = "gateway-mtls")]
+pub fn gateway_link_from_env(rt: &tokio::runtime::Runtime) -> Option<Box<dyn GatewayLink>> {
+    let addr = std::env::var("CLAVE_GATEWAY_ADDR").ok()?;
+    let server_name =
+        std::env::var("CLAVE_GATEWAY_SERVER_NAME").unwrap_or_else(|_| "gateway".to_string());
+    let ca = std::fs::read(std::env::var("CLAVE_GATEWAY_CA").ok()?).ok()?;
+    let cert = std::fs::read(std::env::var("CLAVE_DEVICE_CERT").ok()?).ok()?;
+    let key = std::fs::read(std::env::var("CLAVE_DEVICE_KEY").ok()?).ok()?;
+    let identity = clave_proto::mtls::Identity::from_pem(&cert, &key).ok()?;
+    match rt.block_on(clave_proto::mtls::connect_gateway_link(
+        &addr,
+        &server_name,
+        &ca,
+        identity,
+    )) {
+        Ok(link) => {
+            println!("clave-daemon: gateway link up — {addr} over mTLS");
+            Some(Box::new(link))
+        }
+        Err(e) => {
+            eprintln!("clave-daemon: gateway mTLS connect to {addr} failed ({e}); using loopback");
+            None
+        }
+    }
+}
+
+#[cfg(feature = "gateway-mtls")]
+pub fn gateway_link_from_tls(
+    rt: &tokio::runtime::Runtime,
+    tls: &clave_proto::TlsCredentials,
+) -> Option<Box<dyn GatewayLink>> {
+    let identity = clave_proto::mtls::Identity::from_pem(&tls.cert_pem, &tls.key_pem).ok()?;
+    match rt.block_on(clave_proto::mtls::connect_gateway_link(
+        &tls.gateway_addr,
+        &tls.server_name,
+        &tls.ca_pem,
+        identity,
+    )) {
+        Ok(link) => {
+            println!(
+                "clave-daemon: gateway link up — {} over mTLS (enrolled cert)",
+                tls.gateway_addr
+            );
+            Some(Box::new(link))
+        }
+        Err(e) => {
+            eprintln!(
+                "clave-daemon: gateway mTLS connect to {} failed ({e})",
+                tls.gateway_addr
+            );
+            None
+        }
+    }
+}
+
+pub fn spawn_gateway_sync(
+    daemon: Arc<Daemon>,
+    link: Box<dyn GatewayLink>,
+    device_key: DeviceSigningKey,
+    checkpoint_store: FileCheckpointStore,
+    interval: std::time::Duration,
+    clock: impl Fn() -> UnixTime + Send + 'static,
+) {
+    std::thread::spawn(move || {
+        let mut sync = GatewaySync::new(link, device_key, Box::new(checkpoint_store));
+        loop {
+            std::thread::sleep(interval);
+            let report = sync.sync_once(&daemon, clock());
+            if report.applied > 0 || report.rejected > 0 || report.audit_shipped > 0 {
+                eprintln!(
+                    "clave-daemon: gateway sync — applied {}, rejected {}, shipped {} audit event(s)",
+                    report.applied, report.rejected, report.audit_shipped
+                );
+            }
+        }
+    });
 }

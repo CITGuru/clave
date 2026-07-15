@@ -27,6 +27,15 @@ import { launchApp } from "@/lib/launch";
 
 type AppInfo = { id: string; label: string };
 type CapStatus = { capability: string; status: string };
+type WebApp = { id: string; label: string; url: string };
+type StatusInfo = {
+  connected: boolean;
+  tenant: number;
+  policy_version: number;
+  volume_unlocked: boolean;
+  mount_point: string | null;
+  gateway_high_water: number;
+};
 type Section =
   | "launch"
   | "apps"
@@ -37,6 +46,22 @@ type Section =
   | "connectivity"
   | "compliance"
   | "settings";
+
+const STORE_KEY = "clave-launcher-state-v1";
+type Persisted = { hidden: string[]; recents: AppInfo[] };
+
+function loadPersisted(): Persisted {
+  try {
+    const raw = localStorage.getItem(STORE_KEY);
+    if (raw) {
+      const p = JSON.parse(raw) as Partial<Persisted>;
+      return { hidden: p.hidden ?? [], recents: p.recents ?? [] };
+    }
+  } catch {
+    // corrupt or unavailable storage — fall back to empty prefs
+  }
+  return { hidden: [], recents: [] };
+}
 
 function AppTile({
   app,
@@ -190,6 +215,15 @@ function Placeholder({
   );
 }
 
+function StatusRow({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="flex items-center gap-3 px-4 py-3">
+      <span className="flex-1 text-[13px] text-zinc-700">{label}</span>
+      <span className="text-[12px] font-medium text-zinc-500">{value}</span>
+    </div>
+  );
+}
+
 function Grid({
   items,
   editing,
@@ -236,19 +270,32 @@ export function FullView({
 } = {}) {
   const [apps, setApps] = useState<AppInfo[]>([]);
   const [posture, setPosture] = useState<CapStatus[]>([]);
+  const [status, setStatus] = useState<StatusInfo | null>(null);
+  const [webApps, setWebApps] = useState<WebApp[]>([]);
   const [query, setQuery] = useState("");
   const [section, setSection] = useState<Section>(initialSection);
   const [toast, setToast] = useState<string | null>(null);
   const [collapsed, setCollapsed] = useState(initialCollapsed);
   const [editing, setEditing] = useState(initialEditing);
-  const [hidden, setHidden] = useState<Set<string>>(new Set());
-  const [recents, setRecents] = useState<AppInfo[]>([]);
+  const [hidden, setHidden] = useState<Set<string>>(() => new Set(loadPersisted().hidden));
+  const [recents, setRecents] = useState<AppInfo[]>(() => loadPersisted().recents);
   const [launching, setLaunching] = useState<Set<string>>(new Set());
 
   useEffect(() => {
     invoke<AppInfo[]>("list_apps").then(setApps).catch(console.error);
     invoke<CapStatus[]>("enforcement").then(setPosture).catch(console.error);
+    invoke<StatusInfo>("status").then(setStatus).catch(console.error);
+    invoke<WebApp[]>("list_web_apps").then(setWebApps).catch(console.error);
   }, []);
+
+  useEffect(() => {
+    try {
+      const state: Persisted = { hidden: [...hidden], recents };
+      localStorage.setItem(STORE_KEY, JSON.stringify(state));
+    } catch {
+      // storage unavailable — prefs simply won't persist this session
+    }
+  }, [hidden, recents]);
 
   const filtered = useMemo(
     () =>
@@ -478,11 +525,44 @@ export function FullView({
           )}
 
           {section === "websites" && (
-            <Placeholder
-              title="Websites"
-              icon={Globe}
-              text="Work web apps appear here once your policy defines them."
-            />
+            <div>
+              <h1 className="text-[26px] font-semibold tracking-tight">Websites</h1>
+              <p className="mb-6 mt-3 text-[13px] text-zinc-500">
+                Work web apps open in a contained browser profile on the Clave Disk.
+              </p>
+              {webApps.length === 0 ? (
+                <div className="mt-12 flex flex-col items-center gap-3 text-center">
+                  <div className="grid h-12 w-12 place-items-center rounded-2xl bg-zinc-100 text-zinc-400">
+                    <Globe className="h-6 w-6" />
+                  </div>
+                  <p className="max-w-sm text-sm text-zinc-500">
+                    Work web apps appear here once your policy defines them.
+                  </p>
+                </div>
+              ) : (
+                <div className="max-w-xl divide-y divide-zinc-100 overflow-hidden rounded-xl border border-zinc-200">
+                  {webApps.map((w) => (
+                    <div key={w.id} className="flex items-center gap-3 px-4 py-3">
+                      <Globe className="h-4 w-4 shrink-0 text-zinc-400" />
+                      <div className="min-w-0 flex-1">
+                        <div className="truncate text-[13px] text-zinc-800">{w.label}</div>
+                        <div className="truncate text-[11px] text-zinc-400">{w.url}</div>
+                      </div>
+                      <button
+                        className="rounded-md bg-zinc-900 px-3 py-1.5 text-[12px] font-medium text-white hover:bg-zinc-700"
+                        onClick={() => {
+                          invoke<number>("launch_web", { appId: w.id })
+                            .then(() => setToast(`Opening ${w.label}…`))
+                            .catch((e) => setToast(String(e)));
+                        }}
+                      >
+                        Open
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
           )}
           {section === "notifications" && (
             <Placeholder
@@ -555,11 +635,37 @@ export function FullView({
             </div>
           )}
           {section === "settings" && (
-            <Placeholder
-              title="Settings"
-              icon={Settings}
-              text="Account, device, and policy settings."
-            />
+            <div>
+              <h1 className="text-[26px] font-semibold tracking-tight">Settings</h1>
+              <p className="mb-6 mt-3 text-[13px] text-zinc-500">
+                This device’s enrollment and Clave Disk status.
+              </p>
+              {status && !status.connected ? (
+                <div className="max-w-xl rounded-xl border border-zinc-200 px-4 py-6 text-center text-sm text-zinc-400">
+                  The Clave daemon is not running — showing no live status.
+                </div>
+              ) : (
+                <div className="max-w-xl divide-y divide-zinc-100 overflow-hidden rounded-xl border border-zinc-200">
+                  <StatusRow label="Tenant" value={status ? `#${status.tenant}` : "…"} />
+                  <StatusRow
+                    label="Policy version"
+                    value={status ? `v${status.policy_version}` : "…"}
+                  />
+                  <StatusRow
+                    label="Clave Disk"
+                    value={status ? (status.volume_unlocked ? "unlocked" : "locked") : "…"}
+                  />
+                  <StatusRow
+                    label="Mount point"
+                    value={status?.mount_point ?? "not mounted"}
+                  />
+                  <StatusRow
+                    label="Last gateway sync"
+                    value={status ? `#${status.gateway_high_water}` : "…"}
+                  />
+                </div>
+              )}
+            </div>
           )}
         </div>
 

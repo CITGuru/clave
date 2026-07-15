@@ -6,7 +6,13 @@ use clave_identity::{
 use sqlx::postgres::PgPoolOptions;
 use sqlx::{PgPool, Row};
 
-use crate::{DeviceId, GatewayError, Store};
+use clave_proto::{ChainHash, SpoolEntry, GENESIS};
+
+use crate::store::hex;
+use crate::{
+    AuditAlert, AuditStore, DeviceId, DeviceRecord, DeviceStatus, GatewayError, MemberRecord,
+    PersistedChain, Store,
+};
 
 pub struct PgStore {
     pool: PgPool,
@@ -63,9 +69,44 @@ fn sso_to(s: SsoMode) -> &'static str {
     }
 }
 
+fn device_status_to(s: DeviceStatus) -> &'static str {
+    match s {
+        DeviceStatus::Pending => "pending",
+        DeviceStatus::Active => "active",
+        DeviceStatus::Locked => "locked",
+        DeviceStatus::Wiped => "wiped",
+    }
+}
+
+fn device_status_from(s: &str) -> DeviceStatus {
+    match s {
+        "pending" => DeviceStatus::Pending,
+        "locked" => DeviceStatus::Locked,
+        "wiped" => DeviceStatus::Wiped,
+        _ => DeviceStatus::Active,
+    }
+}
+
+fn device_record(row: &sqlx::postgres::PgRow) -> Result<DeviceRecord, GatewayError> {
+    let id: uuid::Uuid = row.try_get("id").map_err(store_err)?;
+    let enrolled_by: i64 = row.try_get("enrolled_by").map_err(store_err)?;
+    let pubkey: Vec<u8> = row.try_get("device_pubkey").map_err(store_err)?;
+    let status: String = row.try_get("status").map_err(store_err)?;
+    Ok(DeviceRecord {
+        id: DeviceId(id.as_u128()),
+        enrolled_by: UserId(enrolled_by as u64),
+        status: device_status_from(&status),
+        pubkey: hex(&pubkey),
+    })
+}
+
 impl PgStore {
     pub fn new(pool: PgPool) -> Self {
         Self { pool }
+    }
+
+    pub fn pool(&self) -> PgPool {
+        self.pool.clone()
     }
 
     pub async fn connect(url: &str) -> Result<Self, GatewayError> {
@@ -270,5 +311,257 @@ impl Store for PgStore {
         .map_err(store_err)?;
         let id: uuid::Uuid = row.try_get("id").map_err(store_err)?;
         Ok(DeviceId(id.as_u128()))
+    }
+
+    async fn list_members(
+        &self,
+        workspace: WorkspaceId,
+    ) -> Result<Vec<MemberRecord>, GatewayError> {
+        let rows = sqlx::query(
+            "SELECT m.user_id, u.email, m.role, m.status FROM membership m \
+             JOIN app_user u ON u.id = m.user_id WHERE m.workspace_id = $1 ORDER BY m.user_id",
+        )
+        .bind(workspace.0 as i64)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(store_err)?;
+        rows.iter()
+            .map(|r| {
+                let user: i64 = r.try_get("user_id").map_err(store_err)?;
+                let email: String = r.try_get("email").map_err(store_err)?;
+                let role: String = r.try_get("role").map_err(store_err)?;
+                let status: String = r.try_get("status").map_err(store_err)?;
+                Ok(MemberRecord {
+                    user: UserId(user as u64),
+                    email,
+                    role: role_from(&role),
+                    status: status_from(&status),
+                })
+            })
+            .collect()
+    }
+
+    async fn put_invitation(&self, invitation: &Invitation) -> Result<(), GatewayError> {
+        self.upsert_invitation(invitation).await
+    }
+
+    async fn list_invitations(
+        &self,
+        workspace: WorkspaceId,
+    ) -> Result<Vec<Invitation>, GatewayError> {
+        let rows = sqlx::query(
+            "SELECT email, role, expires_at, accepted FROM invitation \
+             WHERE workspace_id = $1 ORDER BY email",
+        )
+        .bind(workspace.0 as i64)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(store_err)?;
+        rows.iter()
+            .map(|r| {
+                let email: String = r.try_get("email").map_err(store_err)?;
+                let role: String = r.try_get("role").map_err(store_err)?;
+                let expires_at: i64 = r.try_get("expires_at").map_err(store_err)?;
+                let accepted: bool = r.try_get("accepted").map_err(store_err)?;
+                Ok(Invitation {
+                    workspace,
+                    email: EmailAddr::parse(&email)
+                        .ok_or_else(|| store_err("stored email is invalid"))?,
+                    role: role_from(&role),
+                    expires_at: expires_at as u64,
+                    accepted,
+                })
+            })
+            .collect()
+    }
+
+    async fn list_devices(
+        &self,
+        workspace: WorkspaceId,
+    ) -> Result<Vec<DeviceRecord>, GatewayError> {
+        let rows = sqlx::query(
+            "SELECT id, enrolled_by, device_pubkey, status FROM device \
+             WHERE workspace_id = $1 ORDER BY enrolled_at",
+        )
+        .bind(workspace.0 as i64)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(store_err)?;
+        rows.iter().map(device_record).collect()
+    }
+
+    async fn device(
+        &self,
+        workspace: WorkspaceId,
+        device: DeviceId,
+    ) -> Result<Option<DeviceRecord>, GatewayError> {
+        let row = sqlx::query(
+            "SELECT id, enrolled_by, device_pubkey, status FROM device \
+             WHERE workspace_id = $1 AND id = $2",
+        )
+        .bind(workspace.0 as i64)
+        .bind(uuid::Uuid::from_u128(device.0))
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(store_err)?;
+        row.as_ref().map(device_record).transpose()
+    }
+
+    async fn set_device_status(
+        &self,
+        workspace: WorkspaceId,
+        device: DeviceId,
+        status: DeviceStatus,
+    ) -> Result<(), GatewayError> {
+        let result = sqlx::query("UPDATE device SET status = $3 WHERE workspace_id = $1 AND id = $2")
+            .bind(workspace.0 as i64)
+            .bind(uuid::Uuid::from_u128(device.0))
+            .bind(device_status_to(status))
+            .execute(&self.pool)
+            .await
+            .map_err(store_err)?;
+        if result.rows_affected() == 0 {
+            return Err(GatewayError::NotFound(format!("device {}", device.0)));
+        }
+        Ok(())
+    }
+
+    async fn set_device_fingerprint(
+        &self,
+        device: DeviceId,
+        fingerprint: [u8; 32],
+    ) -> Result<(), GatewayError> {
+        sqlx::query("UPDATE device SET cert_fingerprint = $2 WHERE id = $1")
+            .bind(uuid::Uuid::from_u128(device.0))
+            .bind(&fingerprint[..])
+            .execute(&self.pool)
+            .await
+            .map_err(store_err)?;
+        Ok(())
+    }
+
+    async fn device_by_fingerprint(
+        &self,
+        fingerprint: &[u8; 32],
+    ) -> Result<Option<DeviceId>, GatewayError> {
+        let row = sqlx::query("SELECT id FROM device WHERE cert_fingerprint = $1")
+            .bind(&fingerprint[..])
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(store_err)?;
+        match row {
+            None => Ok(None),
+            Some(r) => {
+                let id: uuid::Uuid = r.try_get("id").map_err(store_err)?;
+                Ok(Some(DeviceId(id.as_u128())))
+            }
+        }
+    }
+}
+
+pub struct PgAuditStore {
+    pool: PgPool,
+}
+
+impl PgAuditStore {
+    pub fn new(pool: PgPool) -> Self {
+        Self { pool }
+    }
+}
+
+fn chain_hash_from(bytes: &[u8]) -> ChainHash {
+    let mut h = GENESIS;
+    let n = bytes.len().min(h.len());
+    h[..n].copy_from_slice(&bytes[..n]);
+    h
+}
+
+#[async_trait]
+impl AuditStore for PgAuditStore {
+    async fn register(&self, device: DeviceId, _public_key: [u8; 32]) -> Result<(), GatewayError> {
+        sqlx::query(
+            "INSERT INTO audit_chain (device_id, next_seq, head) VALUES ($1, 1, $2) \
+             ON CONFLICT (device_id) DO UPDATE SET next_seq = 1, head = EXCLUDED.head, updated_at = now()",
+        )
+        .bind(uuid::Uuid::from_u128(device.0))
+        .bind(&GENESIS[..])
+        .execute(&self.pool)
+        .await
+        .map_err(store_err)?;
+        Ok(())
+    }
+
+    async fn append(
+        &self,
+        device: DeviceId,
+        entries: &[SpoolEntry],
+        next_seq: u64,
+        head: ChainHash,
+    ) -> Result<(), GatewayError> {
+        let id = uuid::Uuid::from_u128(device.0);
+        let mut tx = self.pool.begin().await.map_err(store_err)?;
+        sqlx::query("UPDATE audit_chain SET next_seq = $2, head = $3, updated_at = now() WHERE device_id = $1")
+            .bind(id)
+            .bind(next_seq as i64)
+            .bind(&head[..])
+            .execute(&mut *tx)
+            .await
+            .map_err(store_err)?;
+        for e in entries {
+            sqlx::query(
+                "INSERT INTO audit_event (device_id, seq, ts, zone, action, verdict, app_id) \
+                 VALUES ($1, $2, $3, $4, $5, $6, $7) ON CONFLICT (device_id, seq) DO NOTHING",
+            )
+            .bind(id)
+            .bind(e.seq as i64)
+            .bind(e.event.ts as i64)
+            .bind(format!("{:?}", e.event.zone))
+            .bind(format!("{:?}", e.event.action))
+            .bind(format!("{:?}", e.event.verdict))
+            .bind(e.event.app_id.as_ref().map(|a| a.0.as_str()))
+            .execute(&mut *tx)
+            .await
+            .map_err(store_err)?;
+        }
+        tx.commit().await.map_err(store_err)?;
+        Ok(())
+    }
+
+    async fn record_alert(&self, alert: &AuditAlert) -> Result<(), GatewayError> {
+        sqlx::query("INSERT INTO audit_alert (device_id, kind, detail) VALUES ($1, $2, $3)")
+            .bind(uuid::Uuid::from_u128(alert.device.0))
+            .bind(&alert.kind)
+            .bind(&alert.detail)
+            .execute(&self.pool)
+            .await
+            .map_err(store_err)?;
+        Ok(())
+    }
+
+    async fn load_chains(&self) -> Result<Vec<PersistedChain>, GatewayError> {
+        let rows = sqlx::query(
+            "SELECT c.device_id, d.device_pubkey, c.next_seq, c.head FROM audit_chain c \
+             JOIN device d ON d.id = c.device_id",
+        )
+        .fetch_all(&self.pool)
+        .await
+        .map_err(store_err)?;
+        rows.iter()
+            .map(|r| {
+                let id: uuid::Uuid = r.try_get("device_id").map_err(store_err)?;
+                let pubkey: Vec<u8> = r.try_get("device_pubkey").map_err(store_err)?;
+                let next_seq: i64 = r.try_get("next_seq").map_err(store_err)?;
+                let head: Vec<u8> = r.try_get("head").map_err(store_err)?;
+                let mut pk = [0u8; 32];
+                let n = pubkey.len().min(32);
+                pk[..n].copy_from_slice(&pubkey[..n]);
+                Ok(PersistedChain {
+                    device: DeviceId(id.as_u128()),
+                    public_key: pk,
+                    next_seq: next_seq as u64,
+                    head: chain_hash_from(&head),
+                })
+            })
+            .collect()
     }
 }

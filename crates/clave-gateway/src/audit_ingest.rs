@@ -1,10 +1,25 @@
 use std::collections::HashMap;
 use std::sync::Mutex;
 
+use async_trait::async_trait;
 use clave_core::AuditEvent;
-use clave_proto::{verify_batch, AuditError, ChainHash, SignedSpoolBatch};
+use clave_proto::{verify_batch, AuditError, ChainHash, SignedSpoolBatch, SpoolEntry, GENESIS};
+use serde::Serialize;
 
-use crate::DeviceId;
+use crate::{DeviceId, GatewayError};
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct AuditAlert {
+    pub device: DeviceId,
+    pub kind: String,
+    pub detail: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct AuditRecord {
+    pub device: DeviceId,
+    pub event: AuditEvent,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum IngestError {
@@ -33,6 +48,7 @@ struct DeviceChain {
 pub struct AuditLedger {
     chains: Mutex<HashMap<DeviceId, DeviceChain>>,
     verified: Mutex<Vec<(DeviceId, AuditEvent)>>,
+    alerts: Mutex<Vec<AuditAlert>>,
 }
 
 impl AuditLedger {
@@ -51,6 +67,23 @@ impl AuditLedger {
         );
     }
 
+    pub fn restore_device(
+        &self,
+        device: DeviceId,
+        public_key: [u8; 32],
+        next_seq: u64,
+        head: ChainHash,
+    ) {
+        self.chains.lock().expect("ledger lock").insert(
+            device,
+            DeviceChain {
+                public_key,
+                next_seq,
+                head,
+            },
+        );
+    }
+
     pub fn ingest(
         &self,
         device: DeviceId,
@@ -61,16 +94,21 @@ impl AuditLedger {
             .get_mut(&device)
             .ok_or(IngestError::UnknownDevice(device))?;
 
-        let new_head = verify_batch(chain.head, chain.next_seq, batch, chain.public_key)
-            .map_err(IngestError::Rejected)?;
+        let new_head = match verify_batch(chain.head, chain.next_seq, batch, chain.public_key) {
+            Ok(head) => head,
+            Err(e) => {
+                self.record_alert(device, &e);
+                return Err(IngestError::Rejected(e));
+            }
+        };
 
-        let events: Vec<AuditEvent> = batch.entries.iter().map(|e| e.event).collect();
+        let events: Vec<AuditEvent> = batch.entries.iter().map(|e| e.event.clone()).collect();
         chain.next_seq += events.len() as u64;
         chain.head = new_head;
 
         let mut verified = self.verified.lock().expect("ledger lock");
         for e in &events {
-            verified.push((device, *e));
+            verified.push((device, e.clone()));
         }
         Ok(events)
     }
@@ -83,14 +121,147 @@ impl AuditLedger {
             .map(|c| c.next_seq)
     }
 
+    pub fn head_for(&self, device: DeviceId) -> Option<ChainHash> {
+        self.chains
+            .lock()
+            .expect("ledger lock")
+            .get(&device)
+            .map(|c| c.head)
+    }
+
     pub fn events_for(&self, device: DeviceId) -> Vec<AuditEvent> {
         self.verified
             .lock()
             .expect("ledger lock")
             .iter()
             .filter(|(d, _)| *d == device)
-            .map(|(_, e)| *e)
+            .map(|(_, e)| e.clone())
             .collect()
+    }
+
+    pub fn alerts(&self) -> Vec<AuditAlert> {
+        self.alerts.lock().expect("ledger lock").clone()
+    }
+
+    fn record_alert(&self, device: DeviceId, error: &AuditError) {
+        let (kind, detail) = match error {
+            AuditError::Gap { expected, got } => (
+                "gap",
+                format!("suppressed batch: expected seq {expected}, got {got}"),
+            ),
+            AuditError::Tampered { seq } => ("tampered", format!("event {seq} was rewritten")),
+            AuditError::BadSignature => {
+                ("bad_signature", "batch signature does not verify".to_string())
+            }
+            other => ("rejected", other.to_string()),
+        };
+        self.alerts.lock().expect("ledger lock").push(AuditAlert {
+            device,
+            kind: kind.to_string(),
+            detail,
+        });
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PersistedChain {
+    pub device: DeviceId,
+    pub public_key: [u8; 32],
+    pub next_seq: u64,
+    pub head: ChainHash,
+}
+
+#[async_trait]
+pub trait AuditStore: Send + Sync {
+    async fn register(&self, device: DeviceId, public_key: [u8; 32]) -> Result<(), GatewayError>;
+    async fn append(
+        &self,
+        device: DeviceId,
+        entries: &[SpoolEntry],
+        next_seq: u64,
+        head: ChainHash,
+    ) -> Result<(), GatewayError>;
+    async fn record_alert(&self, alert: &AuditAlert) -> Result<(), GatewayError>;
+    async fn load_chains(&self) -> Result<Vec<PersistedChain>, GatewayError>;
+}
+
+#[derive(Default)]
+pub struct MemAuditStore {
+    inner: Mutex<MemAuditState>,
+}
+
+#[derive(Default)]
+struct MemAuditState {
+    chains: HashMap<DeviceId, PersistedChain>,
+    events: Vec<(DeviceId, u64, AuditEvent)>,
+    alerts: Vec<AuditAlert>,
+}
+
+impl MemAuditStore {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn event_count(&self) -> usize {
+        self.inner.lock().expect("store lock").events.len()
+    }
+
+    pub fn alert_count(&self) -> usize {
+        self.inner.lock().expect("store lock").alerts.len()
+    }
+}
+
+#[async_trait]
+impl AuditStore for MemAuditStore {
+    async fn register(&self, device: DeviceId, public_key: [u8; 32]) -> Result<(), GatewayError> {
+        self.inner.lock().expect("store lock").chains.insert(
+            device,
+            PersistedChain {
+                device,
+                public_key,
+                next_seq: 1,
+                head: GENESIS,
+            },
+        );
+        Ok(())
+    }
+
+    async fn append(
+        &self,
+        device: DeviceId,
+        entries: &[SpoolEntry],
+        next_seq: u64,
+        head: ChainHash,
+    ) -> Result<(), GatewayError> {
+        let mut s = self.inner.lock().expect("store lock");
+        if let Some(chain) = s.chains.get_mut(&device) {
+            chain.next_seq = next_seq;
+            chain.head = head;
+        }
+        for e in entries {
+            s.events.push((device, e.seq, e.event.clone()));
+        }
+        Ok(())
+    }
+
+    async fn record_alert(&self, alert: &AuditAlert) -> Result<(), GatewayError> {
+        self.inner
+            .lock()
+            .expect("store lock")
+            .alerts
+            .push(alert.clone());
+        Ok(())
+    }
+
+    async fn load_chains(&self) -> Result<Vec<PersistedChain>, GatewayError> {
+        Ok(self
+            .inner
+            .lock()
+            .expect("store lock")
+            .chains
+            .values()
+            .cloned()
+            .collect())
     }
 }
 

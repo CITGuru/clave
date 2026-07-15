@@ -123,6 +123,7 @@ async fn a_gateway_wipe_is_obeyed_and_the_resulting_audit_verifies_at_the_gatewa
 
     let admitted = gw
         .ingest_device_audit(device, &batch)
+        .await
         .expect("the device's audit verifies at the gateway it enrolled with");
     assert!(admitted.iter().any(|e| e.action == AuditAction::Wiped));
     assert!(
@@ -161,7 +162,7 @@ async fn a_tampered_report_is_rejected_by_the_gateway() {
         batch.entries[0].event.verdict,
     );
 
-    match gw.ingest_device_audit(device, &batch) {
+    match gw.ingest_device_audit(device, &batch).await {
         Err(IngestError::Rejected(AuditError::Tampered { .. })) => {}
         other => panic!("expected the gateway to reject a rewritten report, got {other:?}"),
     }
@@ -193,8 +194,9 @@ async fn a_report_signed_by_the_wrong_device_is_rejected() {
     let (entries, head) = spool.drain();
     let batch = impostor.sign_batch(entries, head);
 
+    let outcome = gw.ingest_device_audit(device, &batch).await;
     assert!(matches!(
-        gw.ingest_device_audit(device, &batch),
+        outcome,
         Err(IngestError::Rejected(AuditError::BadSignature))
     ));
 }

@@ -36,8 +36,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         workos_client_id,
         resolve,
     ));
+    let audit_store = Arc::new(clave_gateway::PgAuditStore::new(store.pool()));
     let store: Arc<dyn Store> = Arc::new(store);
-    let mut gateway: DynGateway = Gateway::new(idp, store);
+    let mut gateway: DynGateway = Gateway::new(idp, store).with_audit_store(audit_store);
 
     if let Some(seed) = std::env::var("GATEWAY_SIGNING_SEED")
         .ok()
@@ -69,6 +70,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         );
         gateway = gateway.with_volume_key_service(Arc::new(svc));
         println!("sealed volume-key service enabled for workspace {workspace_id}");
+    }
+
+    match gateway.hydrate_audit().await {
+        Ok(n) => println!("audit ledger hydrated: {n} device chain(s)"),
+        Err(e) => eprintln!("audit ledger hydrate failed: {e}"),
     }
 
     let key = parse_key(&session_key).ok_or("SESSION_KEY must be 64 hex chars (32 bytes)")?;

@@ -33,6 +33,8 @@ pub trait IdentityProvider: Send + Sync {
         &self,
         device_code: &str,
     ) -> Result<Option<VerifiedUser>, GatewayError>;
+
+    async fn refresh_session(&self, refresh_token: &str) -> Result<VerifiedUser, GatewayError>;
 }
 
 pub struct MockIdentityProvider {
@@ -73,6 +75,13 @@ impl IdentityProvider for MockIdentityProvider {
             Ok(None)
         }
     }
+
+    async fn refresh_session(&self, refresh_token: &str) -> Result<VerifiedUser, GatewayError> {
+        if refresh_token.is_empty() {
+            return Err(GatewayError::Idp("no refresh token".into()));
+        }
+        Ok(self.user.clone())
+    }
 }
 
 #[async_trait]
@@ -88,5 +97,8 @@ impl<T: IdentityProvider + ?Sized> IdentityProvider for Arc<T> {
         device_code: &str,
     ) -> Result<Option<VerifiedUser>, GatewayError> {
         (**self).poll_device_auth(device_code).await
+    }
+    async fn refresh_session(&self, refresh_token: &str) -> Result<VerifiedUser, GatewayError> {
+        (**self).refresh_session(refresh_token).await
     }
 }

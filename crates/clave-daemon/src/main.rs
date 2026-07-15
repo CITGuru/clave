@@ -1,4 +1,13 @@
 fn main() {
+    let args: Vec<String> = std::env::args().collect();
+    if args.get(1).map(String::as_str) == Some("enroll") {
+        if let Err(e) = clave_daemon::run_enroll_cli(&args[2..]) {
+            eprintln!("clave-daemon enroll: {e}");
+            std::process::exit(1);
+        }
+        return;
+    }
+
     println!("clave-daemon — IPC proto v{}", clave_ipc::PROTO_VERSION);
 
     #[cfg(target_os = "macos")]

@@ -10,8 +10,11 @@ usage:
   clave-cli enforcement
   clave-cli classify-exec <team_id> <signing_id> [allowed_team:allowed_signing ...]
   clave-cli classify-path <mount_point> <path> [work_data_root ...]
-  clave-cli apps   <policy.json>
-  clave-cli launch <policy.json> <app_id> <mount_point>
+  clave-cli apps     <policy.json>
+  clave-cli launch   <policy.json> <app_id> <mount_point>
+  clave-cli audit    [--json]
+  clave-cli policy   validate <policy.json>
+  clave-cli policy   template
 ";
 
 fn main() {
@@ -47,6 +50,8 @@ fn run(args: &[String]) -> Result<String, String> {
             let mount = rest.get(2).ok_or("launch needs <mount_point>")?;
             launch_text(&load_policy(path)?, app, mount, &cli_user())
         }
+        "audit" => audit_cmd(rest.iter().any(|a| a == "--json")),
+        "policy" => policy_cmd(rest),
         other => Err(format!("unknown command: {other}")),
     }
 }
@@ -99,6 +104,86 @@ fn launch_text(
     }
     out.push_str("(spawn + inject = OS layer, deferred)\n");
     Ok(out)
+}
+
+fn policy_cmd(args: &[String]) -> Result<String, String> {
+    let (sub, rest) = args
+        .split_first()
+        .ok_or("policy needs a subcommand: validate | template")?;
+    match sub.as_str() {
+        "validate" => {
+            let path = rest.first().ok_or("policy validate needs <policy.json>")?;
+            let pol = load_policy(path)?;
+            let issues = pol.validate();
+            if issues.is_empty() {
+                Ok(format!(
+                    "{path}: valid — v{}, {} app(s), {} web app(s)\n",
+                    pol.version,
+                    pol.apps.allow.len(),
+                    pol.web.apps.len()
+                ))
+            } else {
+                let mut out = format!("{path}: {} issue(s)\n", issues.len());
+                for i in &issues {
+                    out.push_str(&format!("  - {i}\n"));
+                }
+                Ok(out)
+            }
+        }
+        "template" => Ok(policy_template()),
+        other => Err(format!("unknown policy subcommand: {other}")),
+    }
+}
+
+fn policy_template() -> String {
+    let mut pol = PolicyBundle::restrictive_default();
+    pol.version = 1;
+    pol.apps.allow.push(
+        AppRule::new(
+            AppId("example-work".into()),
+            BinaryMatch::Macos {
+                team_id: "TEAMID1234".into(),
+                signing_id: "com.example.app".into(),
+            },
+        )
+        .with_display_name("Example")
+        .with_executable("/Applications/Example.app"),
+    );
+    serde_json::to_string_pretty(&pol)
+        .map(|s| format!("{s}\n"))
+        .unwrap_or_default()
+}
+
+fn audit_cmd(json: bool) -> Result<String, String> {
+    use clave_ipc::transport::{default_launcher_endpoint, LauncherClient};
+
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|e| e.to_string())?;
+    rt.block_on(async {
+        let mut client = LauncherClient::connect(default_launcher_endpoint())
+            .await
+            .map_err(|_| "cannot reach the clave daemon (is it running?)".to_string())?;
+        let events = client.peek_audit().await.map_err(|e| e.to_string())?;
+        if json {
+            return serde_json::to_string_pretty(&events)
+                .map(|s| format!("{s}\n"))
+                .map_err(|e| e.to_string());
+        }
+        if events.is_empty() {
+            return Ok("(audit spool is empty)\n".to_string());
+        }
+        let mut out = String::new();
+        for e in &events {
+            let app = e.app_id.as_ref().map(|a| a.0.as_str()).unwrap_or("-");
+            out.push_str(&format!(
+                "{}\t{:?}\t{:?}\tapp={}\n",
+                e.ts, e.action, e.verdict.decision, app
+            ));
+        }
+        Ok(out)
+    })
 }
 
 fn classify_exec_cmd(args: &[String]) -> Result<String, String> {
@@ -223,6 +308,35 @@ mod tests {
         assert!(run(&args(&["frobnicate"])).is_err());
         assert!(run(&[]).is_err());
         assert!(run(&args(&["classify-path", "/mnt"])).is_err());
+    }
+
+    #[test]
+    fn policy_template_emits_a_clean_bundle() {
+        let out = run(&args(&["policy", "template"])).unwrap();
+        let pol: PolicyBundle = serde_json::from_str(&out).unwrap();
+        assert!(
+            pol.validate().is_empty(),
+            "template must validate clean: {:?}",
+            pol.validate()
+        );
+        assert!(out.contains("example-work"));
+    }
+
+    #[test]
+    fn policy_validate_reports_issues_from_a_file() {
+        let dir = std::env::temp_dir().join(format!("clave-cli-policy-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("p.json");
+        std::fs::write(
+            &path,
+            serde_json::to_string(&PolicyBundle::restrictive_default()).unwrap(),
+        )
+        .unwrap();
+
+        let out = run(&args(&["policy", "validate", path.to_str().unwrap()])).unwrap();
+        assert!(out.contains("version is 0"));
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     fn policy_with_excel() -> PolicyBundle {

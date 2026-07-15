@@ -139,7 +139,7 @@ impl AuditSink for AuditSpool {
             s.pending.push(SpoolEntry {
                 seq,
                 prev,
-                event,
+                event: event.clone(),
                 hash,
             });
         }

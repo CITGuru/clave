@@ -32,6 +32,23 @@ pub struct CapStatus {
     status: String,
 }
 
+#[derive(Serialize)]
+pub struct WebApp {
+    id: String,
+    label: String,
+    url: String,
+}
+
+#[derive(Serialize)]
+pub struct StatusInfo {
+    connected: bool,
+    tenant: u64,
+    policy_version: u64,
+    volume_unlocked: bool,
+    mount_point: Option<String>,
+    gateway_high_water: u64,
+}
+
 fn app(id: &str, signing: &str, name: &str, exec: &str) -> AppRule {
     AppRule::new(
         AppId(id.into()),
@@ -139,6 +156,64 @@ async fn enforcement() -> Vec<CapStatus> {
         .collect()
 }
 
+#[tauri::command]
+async fn list_web_apps() -> Vec<WebApp> {
+    #[cfg(any(unix, windows))]
+    if let Some(mut client) = daemon().await {
+        if let Ok(apps) = client.list_web_apps().await {
+            return apps
+                .into_iter()
+                .map(|a| WebApp {
+                    id: a.app_id.0,
+                    label: a.label,
+                    url: a.url,
+                })
+                .collect();
+        }
+    }
+    Vec::new()
+}
+
+#[tauri::command]
+async fn launch_web(app_id: String) -> Result<u32, String> {
+    #[cfg(any(unix, windows))]
+    if let Some(mut client) = daemon().await {
+        return match client.launch_web(AppId(app_id)).await {
+            Ok(Some(pid)) => Ok(pid),
+            Ok(None) => Err("launch returned no pid".into()),
+            Err(clave_ipc::transport::TransportError::LaunchFailed(e)) => Err(e),
+            Err(e) => Err(e.to_string()),
+        };
+    }
+    let _ = app_id;
+    Err("daemon not running".into())
+}
+
+#[tauri::command]
+async fn status() -> StatusInfo {
+    #[cfg(any(unix, windows))]
+    if let Some(mut client) = daemon().await {
+        if let Ok(s) = client.status().await {
+            return StatusInfo {
+                connected: true,
+                tenant: s.tenant,
+                policy_version: s.policy_version,
+                volume_unlocked: s.volume_unlocked,
+                mount_point: s.mount_point,
+                gateway_high_water: s.gateway_high_water,
+            };
+        }
+    }
+    StatusInfo {
+        connected: false,
+        tenant: 0,
+        policy_version: 0,
+        volume_unlocked: false,
+        mount_point: None,
+        gateway_high_water: 0,
+    }
+}
+
 fn to_launch_info(s: clave_core::LaunchSpec) -> LaunchInfo {
     LaunchInfo {
         executable: s.executable,
@@ -207,7 +282,10 @@ pub fn run() {
             list_apps,
             launch_spec,
             launch_app,
-            enforcement
+            enforcement,
+            status,
+            list_web_apps,
+            launch_web
         ])
         .run(tauri::generate_context!())
         .expect("error while running the Clave app");

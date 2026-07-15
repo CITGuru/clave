@@ -115,6 +115,75 @@ where
     Ok(())
 }
 
+pub struct DeviceLink {
+    audit_in: UnboundedReceiver<SignedSpoolBatch>,
+    command_out: UnboundedSender<SignedCommand>,
+}
+
+impl DeviceLink {
+    pub async fn recv_audit(&mut self) -> Option<SignedSpoolBatch> {
+        self.audit_in.recv().await
+    }
+
+    pub fn send_command(&self, command: SignedCommand) -> Result<(), crate::LinkError> {
+        self.command_out
+            .send(command)
+            .map_err(|_| crate::LinkError::Unavailable)
+    }
+}
+
+pub struct DevicePumpEnds {
+    audit_out: UnboundedSender<SignedSpoolBatch>,
+    command_in: UnboundedReceiver<SignedCommand>,
+}
+
+impl DevicePumpEnds {
+    pub fn send_audit(&self, batch: SignedSpoolBatch) -> Result<(), crate::LinkError> {
+        self.audit_out
+            .send(batch)
+            .map_err(|_| crate::LinkError::Unavailable)
+    }
+}
+
+pub fn device_link() -> (DeviceLink, DevicePumpEnds) {
+    let (audit_tx, audit_rx) = unbounded_channel();
+    let (cmd_tx, cmd_rx) = unbounded_channel();
+    (
+        DeviceLink {
+            audit_in: audit_rx,
+            command_out: cmd_tx,
+        },
+        DevicePumpEnds {
+            audit_out: audit_tx,
+            command_in: cmd_rx,
+        },
+    )
+}
+
+pub async fn serve_device_pump<S>(stream: S, mut ends: DevicePumpEnds) -> io::Result<()>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
+    let (mut r, mut w) = tokio::io::split(stream);
+    loop {
+        tokio::select! {
+            incoming = read_msg::<_, SignedSpoolBatch>(&mut r) => match incoming? {
+                Some(batch) => {
+                    if ends.audit_out.send(batch).is_err() {
+                        break;
+                    }
+                }
+                None => break,
+            },
+            outgoing = ends.command_in.recv() => match outgoing {
+                Some(command) => write_msg(&mut w, &command).await?,
+                None => break,
+            },
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

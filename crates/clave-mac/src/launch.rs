@@ -1,6 +1,7 @@
 #![cfg(target_os = "macos")]
 #![allow(deprecated)]
 
+use std::collections::HashSet;
 use std::path::Path;
 use std::process::Command;
 use std::time::{Duration, Instant};
@@ -48,16 +49,27 @@ pub fn running_pids_for_bundle(bundle_id: &str) -> Vec<u32> {
     }
 }
 
-pub fn wait_for_app_pid(app_bundle: &Path, timeout: Duration) -> Option<u32> {
+pub fn wait_for_new_app_pid(
+    app_bundle: &Path,
+    exclude: &HashSet<u32>,
+    timeout: Duration,
+) -> Option<u32> {
     let bundle_id = bundle_identifier(app_bundle)?;
     let deadline = Instant::now() + timeout;
-    while Instant::now() < deadline {
-        if let Some(&pid) = running_pids_for_bundle(&bundle_id).first() {
+    loop {
+        let current = running_pids_for_bundle(&bundle_id);
+        if let Some(pid) = first_new(&current, exclude) {
             return Some(pid);
+        }
+        if Instant::now() >= deadline {
+            return current.last().copied();
         }
         std::thread::sleep(Duration::from_millis(50));
     }
-    running_pids_for_bundle(&bundle_id).first().copied()
+}
+
+fn first_new(current: &[u32], exclude: &HashSet<u32>) -> Option<u32> {
+    current.iter().copied().find(|pid| !exclude.contains(pid))
 }
 
 #[cfg(test)]
@@ -68,5 +80,22 @@ mod tests {
     fn finder_bundle_id_is_readable() {
         let id = bundle_identifier(Path::new("/System/Library/CoreServices/Finder.app"));
         assert_eq!(id.as_deref(), Some("com.apple.finder"));
+    }
+
+    #[test]
+    fn the_new_instance_wins_over_a_preexisting_personal_one() {
+        let preexisting = HashSet::from([100]);
+        assert_eq!(first_new(&[100, 205], &preexisting), Some(205));
+    }
+
+    #[test]
+    fn no_new_instance_yet_reports_none_so_the_wait_keeps_polling() {
+        let preexisting = HashSet::from([100]);
+        assert_eq!(first_new(&[100], &preexisting), None);
+    }
+
+    #[test]
+    fn a_fresh_launch_with_nothing_preexisting_picks_the_only_instance() {
+        assert_eq!(first_new(&[205], &HashSet::new()), Some(205));
     }
 }

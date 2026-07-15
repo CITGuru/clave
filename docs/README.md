@@ -42,6 +42,10 @@ Read in order if you are new to the problem. Jump by subsystem if you are implem
 | 15 | [Identity & Enrollment Auth](15-identity-and-enrollment-auth.md) | Console login, device-enrollment handshake, device registration, sealed-cookie sessions |
 | 16 | [Third-Party Network Providers](16-third-party-network-providers.md) | Pluggable work-zone egress (Zscaler, Cisco, …): vendors-as-data, `ForwardMode` dispatch, IPsec/explicit-proxy/DNS seams |
 | 17 | [Web-App Auth & Browser Containment](17-web-app-auth-and-browser-containment.md) | Work websites: persona profiles (contained `--user-data-dir`), the federated/delegated/assisted auth tiers, Chrome managed-prefs hardening |
+| 18 | [Activity Tracking & Monitoring](18-activity-tracking-and-monitoring.md) | Work-app usage telemetry: active/idle/focus time, sessions, the derived `away` metric, policy-tiered visibility, the tamper-evident usage stream |
+| 19 | [AI Gateway](19-ai-gateway.md) | Contained agents reach models through Clave: request DLP (block/redact/alert) + response usage/trace monitoring; gateway-brokered provider keys (zero-key on device); model-access policy, token budgets, per-user attribution |
+| 20 | [Disk Storage Layer](20-disk-storage-layer.md) | Two subsystems — ① Clave Disk cloud **backup** to object storage (S3/GCS/Azure) with gateway DEK-escrow + the `BackingStore` seam and custody tiers; ② **mountable** external file providers (Google Drive/Box/OneDrive) federated as folders inside Clave Disk via the composed FSKit/WinFsp filesystem, gateway-brokered credentials; plus backup topology and storage metering |
+| 21 | [Contained Computer-Use & Workflow Automation](21-computer-use-and-workflow-automation.md) | Forward-looking: record → SOP → automate, with containment as what makes agentic execution on real work apps safe; the contained-browser de-risked entry |
 | A | [Appendix A — Windows Primitives](appendix-a-windows-primitives.md) | API/crate reference tables |
 | B | [Appendix B — macOS Primitives](appendix-b-macos-primitives.md) | API/crate reference tables |
 | C | [Appendix C — References & Reading List](appendix-c-references.md) | Open-source blueprints, OS docs |

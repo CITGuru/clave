@@ -38,6 +38,10 @@ impl GatewayVerifier {
         self.high_water
     }
 
+    pub fn tenant(&self) -> TenantId {
+        self.tenant
+    }
+
     pub fn verify(
         &mut self,
         signed: &SignedCommand,
